@@ -39,7 +39,7 @@ export function addPortStreet(parent, roadAt) {
     return (u,h,v)=>[r.x+(offset+u)*c-v*sn,base+h,-s+(offset+u)*sn+v*c]
   }
   function house(s,side,width,depth,height,id,detail='') {
-    const wallGap=side>0?5.35:5.15
+    const wallGap=detail==='stall'?4.95:side>0?5.35:5.15
     const at=basis(s,side*(wallGap+width/2),side*wallGap)
     const poly=(pts,tile,tint,uv)=>face(pts.map(p=>at(...p)),tile,tint,uv)
     function box(x,y,z,w,h,d,tile,tint) {
@@ -53,40 +53,63 @@ export function addPortStreet(parent, roadAt) {
     const w=width/2,d=depth/2, peak=height+w*(1.1+id%3*.15)
     const wall=bayTint[id%bayTint.length], tile=[0,7,3,1,4,7][id%6]
     const roof=[8,8,10,9,8][id%5]
+    const jetty=detail==='stall'?1.02:.57
+    const middle=-side*jetty*.5
+    const low=middle-w-jetty*.5, high=middle+w+jetty*.5
     // The horizontal sandstone footing is visible on the downhill side above the quay.
     box(0,-31,0,width-.18,31.27,depth-.18,11,'#a69579')
     box(0,.23,0,width-.24,2.33,depth-.25,id%3===1?5:2,'#f5e7c9')
-    box(0,2.56,0,width,.18,depth,14,rafters)
-    box(0,2.73,0,width,height-2.73,depth,tile,wall)
-    poly([[-w,height,d],[w,height,d],[0,peak,d]],12,wall,triUV)
-    poly([[w,height,-d],[-w,height,-d],[0,peak,-d]],12,wall,triUV)
-    const lip=.32
+    // The jettied timber floor and its brackets both cast down onto the footway.
+    box(middle,2.56,0,width+jetty,.18,depth,14,rafters)
+    box(middle,2.73,0,width+jetty,height-2.73,depth,tile,wall)
+    const frontWall=-side*w, upperWall=-side*(w+jetty)
+    poly([[frontWall,2.56,-d],[upperWall,2.56,-d],[upperWall,2.56,d],[frontWall,2.56,d]],14,'#a48f70')
+    for(const z of [-d+.29,0,d-.29]){
+      for(const dz of [-.11,.11])poly([[frontWall,1.83,z+dz],[upperWall,2.53,z+dz],[frontWall,2.55,z+dz]],14,'#8a7052',triUV)
+      poly([[frontWall,1.83,z-.11],[upperWall,2.53,z-.11],[upperWall,2.53,z+.11],[frontWall,1.83,z+.11]],14,'#a08761')
+    }
+    poly([[low,height,d],[high,height,d],[middle,peak,d]],12,wall,triUV)
+    poly([[high,height,-d],[low,height,-d],[middle,peak,-d]],12,wall,triUV)
+    const lip=detail==='stall'?.68:.43
     for(const sign of [-1,1]){
-      const edge=sign*(w+lip), ridge=0
+      const edge=(sign<0?low:high)+sign*lip, ridge=middle
       poly([[edge,height-.08,d+lip],[edge,height-.08,-d-lip],[ridge,peak+.12,-d-lip],[ridge,peak+.12,d+lip]],roof,'#f9d8ad')
       box(edge,height-.19,0,.14,.15,depth+lip*2,14,rafters)
     }
     box(-side*.85,peak-1.4,-d*.45,.43,2.18,.62,11,'#c8a78b')
     box(-side*.85,peak+.64,-d*.45,.58,.2,.78,11,'#ae947b')
     // A jetty and end posts give the upper timber floor a distinct silhouette as the rider passes.
-    const x=-side*(w+.06)
+    const x=upperWall-side*.06
     for(const z of [-d+.09,d-.09]){
       box(x,2.58,z,.17,height-2.55,.18,14,rafters)
       box(x,2.17,z,.29,.42,.27,14,'#826442')
     }
     if(detail==='stall'){
-      const front=-side*(w+1.43), back=-side*w, z1=d*.74, z0=-z1
+      // An awning is tied to the projecting floor. Its free edge reaches over the
+      // gutter, while the stall counter and posts leave the full racing line open.
+      const back=upperWall, front=back-side*(id%2===0?2.15:1.85)
+      const z1=d*.78,z0=-z1
+      // The shop floor is level while the carriageway falls steeply alongside it.
+      const roadRise=Math.max(...[z0,z1].map(z=>{
+        const [,base,worldZ]=at(front,0,z)
+        return roadAt(-worldZ).y-base
+      }))
+      const cornerHeight=Math.max(3.12,3.04+roadRise), socket=cornerHeight+.83
       for(let i=0;i<8;i++){
         const a=z0+(z1-z0)*i/8,b=z0+(z1-z0)*(i+1)/8
         const color=i%2?'#f4dfa4':['#c75f3a','#688497','#ccae49'][id%3]
-        poly([[front,2.08,a],[front,2.08,b],[back,2.83,b],[back,2.83,a]],15,color)
-        poly([[front,1.92,a],[front,1.92,b],[front,2.08,b],[front,2.08,a]],15,color)
+        poly([[front,cornerHeight,a],[front,cornerHeight,b],[back,socket,b],[back,socket,a]],15,color)
+        poly([[front,cornerHeight-.17,a],[front,cornerHeight-.17,b],[front,cornerHeight,b],[front,cornerHeight,a]],15,color)
       }
-      for(const z of [z0+.12,z1-.12])box(front,.13,z,.08,1.96,.08,14,'#8e6f47')
-      box((front+back)/2,.32,0,.78,.52,z1-z0-.18,14,'#be936a')
+      const post=frontWall-side*.87
+      for(const z of [z0+.12,z1-.12]){
+        box(post,.13,z,.12,cornerHeight+.28,.12,14,'#8e6f47')
+        poly([[front,cornerHeight-.08,z],[back,socket-.12,z],[back,socket,z],[front,cornerHeight,z]],14,rafters)
+      }
+      box(post+side*.24,.32,0,.78,.52,z1-z0-.18,14,'#be936a')
       for(let i=0;i<4;i++) {
         const z=z0+(i+.5)*(z1-z0)/4
-        box((front+back)/2,.84,z,.72,.18,(z1-z0)/4-.11,15,['#e8c167','#af5e42','#879655','#c58c51'][i])
+        box(post+side*.24,.84,z,.72,.18,(z1-z0)/4-.11,15,['#e8c167','#af5e42','#879655','#c58c51'][i])
       }
     }
     if(detail==='tower'){
@@ -101,10 +124,10 @@ export function addPortStreet(parent, roadAt) {
   house(700,-1,6.8,7.1,6.2,1)
   house(707, 1,5.9,7.5,5.7,2)
   house(715,-1,7.2,8.7,7.0,3)
-  house(724, 1,6.2,8.3,6.1,4,'stall')
+  house(725, 1,6.2,10.1,6.9,4,'stall')
   house(727,-1,6.6,7.6,6.5,5)
   house(738,-1,8.0,9.1,6.4,6,'stall')
-  house(740, 1,6.1,7.0,5.3,9)
+  house(740, 1,6.1,8.4,5.8,9)
   house(752,-1,6.4,7.6,7.5,1)
   house(759, 1,7.8,8.6,5.9,12,'stall')
   house(763,-1,7.3,7.8,6.0,3)
