@@ -76,8 +76,7 @@ function v(point) { return new T.Vector3(...point) }
 // Bake each rigid assembly into a single vertex-coloured mesh.
 function assembly() {
   const parts = []
-  function add(geometry, color, matrix = new T.Matrix4(), surface = finishes.get(color) ?? cloth) {
-    const shape = geometry.index ? geometry.toNonIndexed() : geometry
+  function add(shape, color, matrix = new T.Matrix4(), surface = finishes.get(color) ?? cloth) {
     shape.applyMatrix4(matrix)
     for (const name of Object.keys(shape.attributes)) {
       if (name !== 'position' && name !== 'normal' && name !== 'color') shape.deleteAttribute(name)
