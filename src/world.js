@@ -343,6 +343,26 @@ function makeOakAvenue(scene, leaves, shade) {
     if(sx<1.7 || i%2===0) oak(-1,s-5*sz,valleyOffset+rng()*2,height+rng()*3,sx,sy,sz)
     if(sx<1.7 || i%2!==0) oak(1,s+(6+rng()*4)*sz,valleyOffset+1+rng()*2,height-2+rng()*3,sx,sy,sz)
   }
+  // Two roadside oaks break the sightline as the rider crosses the open stretch.
+  // Their limbs stay high over the shoulder, so each trunk passes the rider on one side.
+  for(const [s,side,offset,h] of [[144,1,10.8,16],[195,-1,9.2,14]]){
+    const centre=roadAt(s),x=centre.x+side*offset,z=-s,y=groundAt(x,s)
+    const base=[x,y-.85,z]
+    const crotch=[x+side*.9,centre.y+4.1,z-1.7]
+    const crownBase=[x-side*1.4,centre.y+h*.69,z-3.8]
+    wood.limb([base,[x+side*.8,y+2.8,z+.2],crotch,crownBase,
+      [x+side*.8,centre.y+h,z-5.1]],[1.81,1.55,1.20,.79,.24],.56)
+    for(const [dx,ds,lift,radius] of [[-.58,2.4,.63,3.9],[.56,-3.2,.91,4.2],[.13,4.7,1.0,4.6]]){
+      const end=[x+side*offset*dx,centre.y+h*lift,z+ds]
+      const elbow=[(crotch[0]+end[0])*.5,centre.y+h*(lift*.63),z+ds*.53]
+      wood.limb([crotch,elbow,end],[.82,.49,.19],.39)
+      leaves.crown(...end,radius,radius*.73,radius*.91,s+ds)
+      leaves.crown(end[0]+side*1.7,end[1]+1.1,end[2]-1.2,radius*.77,radius*.61,radius*.72,s+lift)
+    }
+    leaves.crown(crownBase[0],crownBase[1]+2.4,crownBase[2],3.8,3.5,4.5,s)
+    leaves.crown(x+side*.8,centre.y+h,z-5.1,4.7,3.3,4.0,s+1)
+    shade.ellipse(x-h*.48,s-h*.40,h*.44,h*.31,.76,-.71)
+  }
   return wood.finish()
 }
 
@@ -526,18 +546,25 @@ function distantAlps(scene){
   }
 }
 
-// The high forest extends into a painted aerial perspective. Keep the luminous
-// opening aligned with the distant road, while the playable trees, rider and gates
-// retain their own depth and parallax in front of the painting.
+// Each valley has a fixed distant forest. Its apparent scale and bearing change only
+// with the chase camera; the scene fades it out well before the riding route reaches it.
 function elderwoodVista(scene) {
   const image=new THREE.TextureLoader().load(new URL('./art/elderwood-vista.webp',import.meta.url).href)
   image.colorSpace=THREE.SRGBColorSpace
-  const width=260,height=width*793/1983,depth=119
   const mat=new THREE.ShaderMaterial({
     uniforms:{viewMap:{value:image},amount:{value:0}},
     transparent:true,side:THREE.DoubleSide,depthWrite:false,toneMapped:false,
     vertexShader:`varying vec2 st;
-      void main(){st=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+      void main(){
+        st=uv;
+        vec4 eye=modelViewMatrix*vec4(position,1.);
+        gl_Position=projectionMatrix*eye;
+        // Project the painting from its fixed world position. Composite it at
+        // the hand-off from detailed near scenery to the far forest.
+        float layerDepth=clamp(-eye.z*.38,65.,126.);
+        vec4 layer=projectionMatrix*vec4(0.,0.,-layerDepth,1.);
+        gl_Position.z=min(gl_Position.z,gl_Position.w*layer.z/layer.w);
+      }`,
     fragmentShader:`varying vec2 st;uniform sampler2D viewMap;uniform float amount;
       void main(){
         vec3 col=texture2D(viewMap,st).rgb;
@@ -553,21 +580,26 @@ function elderwoodVista(scene) {
         #include <colorspace_fragment>
       }`,
   })
-  const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),mat)
-  panel.renderOrder=0
-  scene.add(panel)
+  function panelAt(x,horizonY,s,width){
+    const height=width*793/1983
+    const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),mat)
+    panel.position.set(x,horizonY+height*.27,-s)
+    panel.frustumCulled=false
+    scene.add(panel)
+    return panel
+  }
+  const upper=panelAt(23,-25,410,836)
+  const lower=panelAt(-12,-110,1129,751)
   let day=true,current=0
   function update(s){
     current=s
-    const first=1-smooth(240,343,s)
-    const second=smooth(670,741,s)*(1-smooth(947,1032,s))
-    const road=roadAt(s+depth)
-    const approach=1+.17*(s<600?smooth(55,306,s):smooth(735,960,s))
-    panel.scale.set(approach,approach,1)
-    panel.position.set(road.x,road.y+height*.27*approach+1,-s-depth)
-    mat.uniforms.amount.value=day?Math.max(first,second):0
-    panel.visible=mat.uniforms.amount.value>.001
+    const first=1-smooth(235,335,s)
+    const second=smooth(670,741,s)*(1-smooth(940,1025,s))
+    upper.visible=day && first>.001
+    lower.visible=day && second>.001
+    mat.uniforms.amount.value=Math.max(first,second)
   }
+  update(0)
   return {update,setTheme(mode){day=mode!=='dusk';update(current)}}
 }
 
