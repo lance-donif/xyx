@@ -609,7 +609,7 @@ export function createRider(type) {
   }
   const cast=silhouette(group,moto,radius,wheelBase,legs)
   let angle=0, phase=0, tilt=0
-  function update(dt,speed,steer,time=0) {
+  function update(dt,speed,steer,time=0,tuck=0) {
     const moving=Math.abs(speed)
     tilt=T.MathUtils.damp(tilt,-T.MathUtils.clamp(steer,-1,1)*(moto?.37:.26),8,dt)
     pivot.rotation.z=tilt
@@ -618,7 +618,11 @@ export function createRider(type) {
     phase=(phase + (moving>.3 ? Math.min(8,2.9+moving*.29)*dt : 0))%(Math.PI*2)
     crank.rotation.x=phase
     const bob=moto ? Math.sin(time*18)*Math.min(moving*.0003,.003) : Math.sin(2*phase)*.009
-    upper.position.y=bob
+    // Fold the torso toward the bars around the saddle; keep the wheels on the ground.
+    const fold=-.72*tuck, saddleY=.92, saddleZ=.16
+    upper.rotation.x=fold
+    upper.position.y=bob+saddleY*(1-Math.cos(fold))+saddleZ*Math.sin(fold)
+    upper.position.z=saddleZ*(1-Math.cos(fold))-saddleY*Math.sin(fold)
     upper.rotation.z=moto?0:.015*Math.cos(phase)
     legs.forEach(([thigh,shin,shoe],i)=>{
       const side=i?1:-1
