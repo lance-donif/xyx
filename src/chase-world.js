@@ -247,11 +247,12 @@ function makeSection(segment,events,sample,materials) {
       const scatter=generator(Math.round(start*73)+(side<0?19201:66153))
       for(let j=0;j<3;j++){
         const along=start+(end-start)*(j+.35)/3,p=sample(along)
-        const x=side*(j===1?42+scatter()*14:22+scatter()*19)
+        const seaward=coast && side>0
+        const x=side*((j===1?42+scatter()*14:22+scatter()*19)+(seaward?26:0))
         const center=point(p,x,0,(scatter()-.5)*8)
         const width=9+scatter()*8, depth=8+scatter()*7
         if(clear(center,max(width,depth)+6)){
-          const top=(coast?3:1)+scatter()*(coast?14:9)
+          const top=seaward?-12+scatter()*5:(coast?3:1)+scatter()*(coast?14:9)
           headland(batch,leaves,center,width,depth,top,coast,scatter)
           if(coast && side>0 && j===1 && Math.floor(start/100)%3===2){
             const beacon=h=>[center[0],center[1]+top+h,center[2]]
@@ -356,23 +357,30 @@ function horizon(root) {
   mountain.renderOrder=-5
   root.add(mountain)
   const material=new THREE.ShaderMaterial({
-    uniforms:{clock:{value:0}},side:THREE.DoubleSide,
+    uniforms:{clock:{value:0},seaMix:{value:0}},side:THREE.DoubleSide,
     vertexShader:`varying vec3 vWorld;void main(){vec4 p=modelMatrix*vec4(position,1.);vWorld=p.xyz;gl_Position=projectionMatrix*viewMatrix*p;}`,
-    fragmentShader:`varying vec3 vWorld;uniform float clock;
+    fragmentShader:`varying vec3 vWorld;uniform float clock;uniform float seaMix;
       void main(){
         vec2 p=vWorld.xz;
         vec3 v=normalize(cameraPosition-vWorld);
         float a=sin(p.x*.26+p.y*.42+clock*1.2+sin(p.y*.16))*.6+sin(p.x*.71-p.y*.3-clock*.8)*.4;
         float gleam=pow(max(0.,a),9.);
         float fres=pow(1.-max(v.y,0.),2.);
-        vec3 col=mix(vec3(.013,.18,.19),vec3(.24,.45,.50),fres)+gleam*vec3(.12,.18,.14);
+        vec3 deep=mix(vec3(.013,.18,.19),vec3(.018,.143,.31),seaMix);
+        vec3 horizon=mix(vec3(.24,.45,.50),vec3(.23,.45,.63),seaMix);
+        vec3 col=mix(deep,horizon,fres)+gleam*vec3(.12,.18,.14);
         gl_FragColor=vec4(col,1.);
         #include <colorspace_fragment>
       }`})
   const water=new THREE.Mesh(new THREE.PlaneGeometry(760,760),material)
   water.rotation.x=-Math.PI/2;root.add(water)
   return {
-    update(p){mountain.position.set(p.x,p.y-13,p.z);water.position.set(p.x,p.y-18.2,p.z);material.uniforms.clock.value=performance.now()*.001},
+    update(p,coastal){
+      material.uniforms.seaMix.value=coastal
+      material.uniforms.clock.value=performance.now()*.001
+      mountain.position.set(p.x,p.y-13,p.z)
+      water.position.set(p.x,p.y-18.2,p.z)
+    },
     dispose(){ridges.dispose()}
   }
 }
@@ -401,9 +409,15 @@ export function createChaseWorld(scene) {
     ready:sky.ready,
     update(segments,distance,events,sample){
       const keep=new Set()
+      let coastal=0
       for(const s of segments){
         if(s.end < distance-26 || s.start>distance+150)continue
         keep.add(s.id)
+        if(s.biome==='coast'){
+          const enter=THREE.MathUtils.smoothstep(distance,s.start-27,s.start)
+          const leave=1-THREE.MathUtils.smoothstep(distance,s.end,s.end+27)
+          coastal=max(coastal,enter*leave)
+        }
         if(!chunks.has(s.id)){
           const mesh=makeSection(s,events,sample,materials)
           chunks.set(s.id,mesh);root.add(mesh)
@@ -411,7 +425,7 @@ export function createChaseWorld(scene) {
       }
       for(const [id,g] of chunks)if(!keep.has(id)){disposeGroup(g);chunks.delete(id)}
       const p=sample(distance),focus=sample(distance+12)
-      far.update(p)
+      far.update(p,coastal)
       sun.position.set(focus.x-38,focus.y+53,focus.z-29)
       sun.target.position.set(focus.x,focus.y,focus.z)
     },
