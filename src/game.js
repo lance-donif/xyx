@@ -12,7 +12,7 @@ const get = id => document.getElementById(id);
 const routes = {
   alpine: { name: '松冠山道', title: 'ALPINE <br>DESCENT', road: roadAt, laneScale: alpineLaneScale, create: createWorld },
   dusk: { name: '松冠山道 · 暮色山城', title: 'EMBER <br>DESCENT', road: duskAt, laneScale: duskLaneScale, create: createDusk },
-  coast: { name: '翡翠海岸', title: 'COASTAL <br>SPRINT', road: coastAt, create: createCoast }
+  coast: { name: '翡翠海岸', title: 'COASTAL <br>SPRINT', road: coastAt, create: createCoast, warmupDistance: 730 }
 };
 const clamp = THREE.MathUtils.clamp;
 const damp = THREE.MathUtils.damp;
@@ -52,11 +52,34 @@ let cameraBank = 0;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let last = 0, worldTime = 0, uiTime = 0, resolution = 1.5, slowSeconds = 0;
 let previewFrame = 0;
+const preparedSkies = new WeakMap();
+function prepareDistantView() {
+  const s = course.warmupDistance;
+  if (!s || preparedSkies.get(scene) === scene.environment) return;
+  const here = course.road(s), ahead = course.road(s + 12);
+  const preview = camera.clone();
+  preview.position.set(here.x, here.y + 2, -s);
+  preview.lookAt(ahead.x, ahead.y + 1, -s - 12);
+  environment.update(s);
+  sunlight.follow(s);
+  // A real draw also prepares shadow-depth variants that material compilation skips.
+  renderer.setScissor(0, 0, 1, 1);
+  renderer.setScissorTest(true);
+  renderer.render(scene, preview);
+  renderer.setScissorTest(false);
+  const from = mode === 'menu' ? 7 : distance;
+  environment.update(from);
+  sunlight.follow(from);
+  preparedSkies.set(scene, scene.environment);
+}
 function refreshPreview() {
   if (mode === 'racing' || previewFrame) return;
   previewFrame = requestAnimationFrame(() => {
     previewFrame = 0;
-    if (scene && mode !== 'racing') renderer.render(scene, camera);
+    if (scene && mode !== 'racing') {
+      if (mode === 'menu') prepareDistantView();
+      renderer.render(scene, camera);
+    }
   });
 }
 function selectScene(updateURL = false) {
@@ -118,6 +141,7 @@ function changeMode(next) {
 }
 function begin() {
   if (!muted) audio.unlock();
+  prepareDistantView();
   distance = startLine;
   offset = lateralSpeed = lean = elapsed = passed = nextGate = noticeFor = 0;
   speed = vehicle === 'moto' ? 17 : 12;
@@ -373,8 +397,15 @@ function init() {
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.toneMappingExposure = 1.12;
+  const start = get('start');
+  THREE.DefaultLoadingManager.onStart = () => {
+    start.disabled = true;
+    start.querySelector('span').textContent = '载入赛道…';
+  };
   // A newly loaded map may complete while the menu or pause screen is stationary.
   THREE.DefaultLoadingManager.onLoad = () => {
+    start.disabled = false;
+    start.querySelector('span').textContent = '出发';
     for (const entry of scenes.values()) entry.sunlight.reset();
     if (scene) sunlight.follow(mode === 'menu' ? 7 : distance);
     refreshPreview();
