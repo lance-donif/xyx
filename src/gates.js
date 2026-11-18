@@ -25,7 +25,7 @@ function banner(text, finish = false) {
   return new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
 }
 
-export function createGates(scene, roadAt) {
+export function createGates(scene, roadAt, laneScale = () => 1) {
   const pole = new THREE.CylinderGeometry(0.035, 0.05, 1, 7);
   const sleeve = new THREE.CylinderGeometry(0.072, 0.081, 0.8, 7);
   const ink = new THREE.MeshStandardMaterial({color: 0x203743});
@@ -37,7 +37,9 @@ export function createGates(scene, roadAt) {
     const {x, y} = roadAt(s);
     const group = new THREE.Group();
     const offset = offsets[index] ?? 0;
-    group.position.set(x + offset, y, -s);
+    const scale = laneScale(s);
+    group.position.set(x + offset * scale, y, -s);
+    group.scale.x = scale;
     for (const side of [-1, 1]) {
       const stick = new THREE.Mesh(pole, ink);
       stick.scale.y = height;

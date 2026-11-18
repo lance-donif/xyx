@@ -15,7 +15,7 @@ function randomSequence(initial) {
   }
 }
 
-function villageAtlas() {
+export function villageAtlas() {
   const random = randomSequence(50819)
   function surface() {
     const canvas = document.createElement('canvas')

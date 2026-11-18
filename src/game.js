@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { roadAt, createWorld } from './world.js';
 import { coastAt, createCoast } from './coast.js';
 import { createRider } from './rider.js';
+import { createDusk, duskAt, duskLaneScale } from './dusk.js';
 import { createGates, COURSE_LENGTH, GATE_HALF_WIDTH } from './gates.js';
 import { createAudio } from './audio.js';
 import { addCanopyLight } from './sunshafts.js';
@@ -10,6 +11,7 @@ import { trackSunlight } from './sunshadow.js';
 const get = id => document.getElementById(id);
 const routes = {
   alpine: { name: '松冠山道', title: 'ALPINE <br>DESCENT', road: roadAt, create: createWorld },
+  dusk: { name: '松冠山道 · 暮色山城', title: 'EMBER <br>DESCENT', road: duskAt, laneScale: duskLaneScale, create: createDusk },
   coast: { name: '翡翠海岸', title: 'COASTAL <br>SPRINT', road: coastAt, create: createCoast }
 };
 const clamp = THREE.MathUtils.clamp;
@@ -35,7 +37,7 @@ function clock(seconds) {
 }
 
 let route = 'alpine', vehicle = 'moto', mode = 'menu', muted = load('muted') === 'true';
-let scene, environment, gates, rider, renderer;
+let scene, course = routes.alpine, environment, gates, rider, renderer, sunlight;
 const scenes = new Map();
 const riders = new Map();
 const camera = new THREE.PerspectiveCamera(56, 1, 0.09, 365);
@@ -56,22 +58,24 @@ function refreshPreview() {
 }
 function selectScene() {
   if (rider) rider.group.removeFromParent();
-  const def = routes[route];
-  if (!scenes.has(route)) {
+  const dusk = route === 'alpine' && vehicle === 'cycle';
+  const sceneKey = dusk ? 'dusk' : route;
+  course = routes[sceneKey];
+  if (!scenes.has(sceneKey)) {
     const next = new THREE.Scene();
     next.addEventListener('skychange', () => { if (scene === next) refreshPreview(); });
-    const landscape = def.create(next);
-    scenes.set(route, {
-      scene: next, environment: landscape, gates: createGates(next, def.road),
-      sunlight: trackSunlight(next, def.road),
-      setDusk: route === 'alpine' ? addCanopyLight(next, def.road) : null
+    const landscape = course.create(next);
+    scenes.set(sceneKey, {
+      scene: next, environment: landscape, gates: createGates(next, course.road, course.laneScale),
+      sunlight: trackSunlight(next, course.road),
+      setDusk: sceneKey === 'alpine' ? addCanopyLight(next, course.road) : null
     });
   }
-  ({scene, environment, gates} = scenes.get(route));
-  const dusk = route === 'alpine' && vehicle === 'cycle';
+  const view = scenes.get(sceneKey);
+  ({scene, environment, gates, sunlight} = view);
   environment.setTheme?.(dusk ? 'dusk' : 'day');
-  scenes.get(route).setDusk?.(dusk);
-  scenes.get(route).sunlight.reset();
+  view.setDusk?.(dusk);
+  sunlight.reset();
   camera.far = route === 'coast' ? 1300 : 900;
   camera.updateProjectionMatrix();
   if (!riders.has(vehicle)) riders.set(vehicle, createRider(vehicle));
@@ -82,7 +86,7 @@ function selectScene() {
     if (object.isMesh) { object.castShadow = false; object.receiveShadow = true; }
   });
   const sun = scene.getObjectByProperty('isDirectionalLight', true);
-  rider.setLighting?.(sun?.position, def.road);
+  rider.setLighting?.(sun?.position, course.road);
   rider.setKit?.(dusk ? 'red' : 'ivory');
   for (const button of document.querySelectorAll('[data-vehicle]')) {
     button.setAttribute('aria-pressed', String(button.dataset.vehicle === vehicle));
@@ -90,9 +94,9 @@ function selectScene() {
   for (const button of document.querySelectorAll('[data-route]')) {
     button.setAttribute('aria-pressed', String(button.dataset.route === route));
   }
-  get('course-title').innerHTML = def.title;
-  get('course-name').textContent = def.name;
-  get('hud-course-name').textContent = def.name;
+  get('course-title').innerHTML = course.title;
+  get('course-name').textContent = course.name;
+  get('hud-course-name').textContent = course.name;
   setView(0, true);
   renderer.render(scene, camera);
 }
@@ -158,7 +162,7 @@ function held(action) {
   return false;
 }
 function step(dt, clockDelta) {
-  const road = routes[route].road;
+  const road = course.road;
   const mid = road(distance);
   const near = road(distance - 3), far = road(distance + 3);
   const curvature = (far.x - 2 * mid.x + near.x) / 9;
@@ -199,14 +203,15 @@ function step(dt, clockDelta) {
 }
 function setView(dt, snap = false) {
   const preview = mode === 'menu';
-  const road = routes[route].road;
+  const road = course.road;
   const s = preview ? 7 : distance;
+  const laneOffset = offset * (course.laneScale?.(s) ?? 1);
   const center = road(s), forward = road(s + 1);
   const yaw = Math.atan2(forward.x - center.x, 1);
   const sin = Math.sin(yaw), cos = Math.cos(yaw);
   const slope = (forward.y - center.y) * cos;
   const bob = preview ? 0 : Math.sin(worldTime * 13) * 0.008 * (speed / 25);
-  rider.group.position.set(center.x + offset, center.y + 0.035 + bob, -s);
+  rider.group.position.set(center.x + laneOffset, center.y + 0.035 + bob, -s);
   rider.group.rotation.order = 'YXZ';
   rider.group.rotation.y = -yaw - (preview ? 0 : 0.038 * lean);
   rider.group.rotation.x = Math.atan(slope);
@@ -220,19 +225,19 @@ function setView(dt, snap = false) {
   const side = preview ? (portrait ? -0.65 : coast ? -2 : 1.1)
     : (coast ? -0.85 : 0.10) - lean * 0.64;
   const height = preview ? (coast ? 2.9 : 3.15) : (coast ? 1.94 : 2.52);
-  eye.set(center.x + offset * 0.70 - sin * camDist + cos * side,
+  eye.set(center.x + laneOffset * 0.70 - sin * camDist + cos * side,
     center.y - slope * camDist * (coast ? 0.27 : 0.72) + height + bob * 0.35, -s + cos * camDist + sin * side);
   eye.y = Math.max(eye.y, road(-eye.z).y + 0.95);
   const lookAhead = preview ? 17 : 13 + speed * 0.12;
   const front = road(s + lookAhead);
   const composition = preview && !portrait ? (coast ? -2.8 : -4.4) : (coast ? 1.75 : 0.0);
   const aimX = THREE.MathUtils.lerp(center.x + (forward.x - center.x) * lookAhead, front.x, 0.65)
-    + offset * 0.72 + composition * cos;
+    + laneOffset * 0.72 + composition * cos;
   const aimZ = -s - lookAhead + composition * sin;
   // Frame the torso below centre so both tyres and the skyline survive a change in grade.
   const baseFov = portrait ? 63 : coast ? 52 : 54;
   const framing = preview ? (portrait ? 0.44 : 0.71) : 0.68;
-  const subjectAngle = Math.atan2(eye.y - center.y - 0.88, Math.hypot(eye.x - center.x - offset, eye.z + s));
+  const subjectAngle = Math.atan2(eye.y - center.y - 0.88, Math.hypot(eye.x - center.x - laneOffset, eye.z + s));
   const pitch = clamp(subjectAngle - Math.atan((framing * 2 - 1) * Math.tan(baseFov * Math.PI / 360)), 0.04, coast && !preview ? 0.19 : 0.43);
   target.set(aimX, eye.y - Math.hypot(aimX - eye.x, aimZ - eye.z) * Math.tan(pitch), aimZ);
   const curve = (road(s + 8).x - 2 * center.x + road(s - 8).x) / 64;
@@ -257,7 +262,7 @@ function setView(dt, snap = false) {
   camera.rotateZ(cameraBank);
   gates.update(s);
   environment.update(s);
-  scenes.get(route).sunlight.follow(s);
+  sunlight.follow(s);
 }
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -363,7 +368,7 @@ function init() {
   // A newly loaded map may complete while the menu or pause screen is stationary.
   THREE.DefaultLoadingManager.onLoad = () => {
     for (const entry of scenes.values()) entry.sunlight.reset();
-    if (scene) scenes.get(route).sunlight.follow(mode === 'menu' ? 7 : distance);
+    if (scene) sunlight.follow(mode === 'menu' ? 7 : distance);
     refreshPreview();
   };
   resize();
