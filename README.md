@@ -10,6 +10,8 @@
 | [暮色山城 · 自行车](https://lance-donif.github.io/xyx/?route=alpine&vehicle=cycle) | 从坡顶望见夕阳下的灯城，沿土路转入半木结构房屋和摊棚之间。 |
 | [翡翠海岸 · 自行车](https://lance-donif.github.io/xyx/?route=coast&vehicle=cycle) | 沿向海的崖壁下降，越过弯道看对岸的港城和高架拱桥。海岸也可选择摩托车。 |
 
+[查看首版与本轮实玩的同里程画面对照](docs/visual-update.webp)
+
 骑手会自动前进。对准八道橙色计时门，漏过一道会在冲线时加三秒。成绩按赛道和车型保存在当前浏览器。
 
 | 操作 | 键盘 |
