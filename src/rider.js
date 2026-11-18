@@ -483,7 +483,7 @@ function silhouette(group, moto, radius, wheelBase, legs) {
   let sun=new T.Vector3(-.8,.8,-.49), road
   let nextPaint=0, oldYaw=Infinity, oldTilt=Infinity
   const inverse=new T.Quaternion(), dir=new T.Vector3()
-  function update(dt, tilt, bob, force=false) {
+  function update(dt, tilt, bob, force=false, clearance=0) {
     const c=Math.cos(tilt), q=Math.sin(tilt)
     const yaw=group.rotation.y, cy=Math.cos(yaw), sy=Math.sin(yaw)
     // Compensate pitch and the suspension bounce independently of the lighting.
@@ -497,7 +497,7 @@ function silhouette(group, moto, radius, wheelBase, legs) {
         points.setY(i,(elevation-group.position.y+localZ*sp)/cp)
       }
       points.needsUpdate=true
-    } else mesh.position.y=.021
+    } else mesh.position.y=.021-clearance
     nextPaint-=dt
     if (!force && nextPaint>0 && Math.abs(tilt-oldTilt)<.03 && Math.abs(yaw-oldYaw)<.03) return
     nextPaint=1/13
@@ -609,7 +609,7 @@ export function createRider(type) {
   }
   const cast=silhouette(group,moto,radius,wheelBase,legs)
   let angle=0, phase=0, tilt=0
-  function update(dt,speed,steer,time=0,tuck=0) {
+  function update(dt,speed,steer,time=0,tuck=0,clearance=0) {
     const moving=Math.abs(speed)
     tilt=T.MathUtils.damp(tilt,-T.MathUtils.clamp(steer,-1,1)*(moto?.37:.26),8,dt)
     pivot.rotation.z=tilt
@@ -641,7 +641,8 @@ export function createRider(type) {
       shoe.position.copy(ankle)
       shoe.rotation.x=moto ? -.08 : -.10+.17*Math.sin(phase+(side<0?Math.PI:0))
     })
-    cast.update(dt,tilt,bob)
+    contact.position.y=.012-clearance
+    cast.update(dt,tilt,bob,false,clearance)
   }
   function setKit(name) {
     if(moto || !['ivory','red','blue'].includes(name)) return

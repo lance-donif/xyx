@@ -17,6 +17,7 @@ function readBest() {
 function boot() {
   const renderer = new THREE.WebGLRenderer({canvas, antialias: true, powerPreference: 'high-performance'});
   renderer.shadowMap.enabled = true;
+  renderer.shadowMap.autoUpdate = false;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.toneMappingExposure = 1.12;
@@ -25,6 +26,8 @@ function boot() {
   const world = createChaseWorld(scene);
   const rider = createRider('cycle');
   rider.setKit('red');
+  // The rider has an animated, ground-projected silhouette of its own.
+  rider.group.traverse(object => { object.castShadow = false; });
   rider.group.rotation.order = 'YXZ';
   scene.add(rider.group);
   const wolves = [createWolf(0), createWolf(1)];
@@ -34,7 +37,7 @@ function boot() {
   const aim = new THREE.Vector3();
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let course, run, lastTime, gesture, cameraYaw = 0, best = readBest(), resolution = 1;
-  let slowTime = 0;
+  let slowTime = 0, shadowDistance = -Infinity;
   function reset() {
     const seed = new URLSearchParams(location.search).get('seed');
     if (course) world.update([], 0, [], course.sample);
@@ -42,6 +45,7 @@ function boot() {
     course.update(0);
     run = createRun(course, best);
     cameraYaw = course.sample(0).yaw;
+    shadowDistance = -Infinity;
     keys.clear();
     gesture = null;
   }
@@ -83,7 +87,7 @@ function boot() {
     rider.group.position.set(x, p.y + .035 + s.jump - (dropping ? 8 * ending * ending : 0), z);
     rider.group.rotation.y = p.yaw - s.steer * .055;
     rider.group.rotation.x = Math.atan2(ahead.y - p.y, .8) + s.jump * .045 - (dropping ? ending * .85 : 0);
-    rider.update(dt, s.phase === 'ready' ? 0 : s.speed, clamp(s.steer - turnRate * 8, -1, 1), s.clock, s.tuck);
+    rider.update(dt, s.phase === 'ready' ? 0 : s.speed, clamp(s.steer - turnRate * 8, -1, 1), s.clock, s.tuck, s.jump);
     wolves.forEach((w, i) => {
       const gap = s.loss === 'caught' ? Math.max(.15, s.wolfGap - ending * 3.5) : s.wolfGap;
       const pos = course.sample(s.distance - gap - i * .85);
@@ -102,6 +106,10 @@ function boot() {
     camera.up.set(reduced ? 0 : cos * turnRate * .20, 1, reduced ? 0 : -sin * turnRate * .20);
     camera.lookAt(aim);
     ui.update(s);
+    if (Math.abs(s.distance - shadowDistance) >= 5 || s.phase === 'ready') {
+      renderer.shadowMap.needsUpdate = true;
+      shadowDistance = s.distance;
+    }
     renderer.render(scene, camera);
   }
   function resize() {
@@ -115,6 +123,11 @@ function boot() {
   }
   resize();
   // The first preview frame can precede asynchronous texture decoding.
+  world.ready.then(() => {
+    if (run.state.phase !== 'ready') return;
+    renderer.compile(scene, camera);
+    draw(0);
+  });
   THREE.DefaultLoadingManager.onLoad = () => { if (run.state.phase === 'ready') draw(0); };
   addEventListener('resize', resize);
   addEventListener('keydown', event => {
