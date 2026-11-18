@@ -402,7 +402,7 @@ export function createCoast(scene) {
   scene.fog=new THREE.Fog(0x9aaac7,245,1230)
   const sun=new THREE.DirectionalLight(0xffe8ae,3.8)
   sun.position.copy(coastSunDirection).multiplyScalar(150)
-  root.add(sun,new THREE.HemisphereLight(0xd4e8ff,0x8f7853,1.15))
+  root.add(sun,new THREE.HemisphereLight(0x9db9ff,0x777568,.96))
   const sky=mountSky(scene,'coast')
   const marine=addMarineSky(root,scene)
   const ground=makeGround(root)
