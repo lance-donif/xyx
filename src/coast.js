@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { terrainMap, createFoliageBatch } from './nature.js'
 import { mountSky } from './sky.js'
+import { addMarineSky, marineLight, mistOnHorizon } from './coast-sky.js'
 
 const COURSE = 1200
 const WATER = -19
@@ -172,7 +173,7 @@ function makeGround(root) {
   },limestone)
 
   // The far shore is mostly seen at glancing angles. Equal world-space units on X/Y keep the cliff grain readable.
-  const rockBlue=linear(0x8899aa), foot=linear(0xc7ad89), top=linear(0xa0a989)
+  const rockBlue=linear(0x7083aa), foot=linear(0xcfa373), top=linear(0x89917f)
   const steps=[-12,-3,0,3,9,18,32,49,71,90,103,107,111,115,120,125,130,135,140,147,158,180,220,320,510]
   grid(root,line(-1250,COURSE+1510,6),steps,(s,u)=>{
     const y=mainland(s,u)
@@ -217,7 +218,7 @@ function makeFacade() {
     for(let r=0;r<3;r++) for(let c=0;c<4;c++){
       const x=c*30+10,y=r*36+13
       ctx.fillStyle='#947e61';ctx.fillRect(x-2,y-2,13,20)
-      ctx.fillStyle=r===1&&c===2?'#f9cc79':'#4b5755';ctx.fillRect(x,y,9,16)
+      ctx.fillStyle=(r+c*2)%5===0?'#ffe2a0':c===3&&r===1?'#efac54':'#4b5755';ctx.fillRect(x,y,9,16)
       ctx.fillStyle='#c9bc9f';ctx.fillRect(x+4,y,1,16)
       ctx.fillStyle='#b8a48b';ctx.fillRect(x-3,y+17,15,2)
     }
@@ -289,7 +290,7 @@ function architecture(instances) {
   const arch=monument(archShape(),stone)
   const spire=monument(new THREE.ConeGeometry(1,1,6),plain)
   const pier=monument(new THREE.CylinderGeometry(.86,1,1,8),stone)
-  const facade=[0xf4ce9c,0xebbf80,0xedce9f,0xf0d9b0,0xd4a585,0xc89570]
+  const facade=[0xffcd81,0xf3ac60,0xf4c898,0xffdaaa,0xe09a70,0xcd8359]
   const slate=[0x8c5545,0xb96940,0x9b5b39,0xc67845,0x736b63,0x65717a]
   function conduitOffset(s,from,to,offset,upper) {
     const end=min(s-from,to-s)
@@ -456,8 +457,61 @@ function breakers(instances) {
   return t=>{clock.value=t}
 }
 
-function makeWater(root,scene) {
-  const time={value:0}, panorama={value:null}, photographed={value:0}
+// Thin sheets of water follow the bends of the distant cliff face and disappear into the harbour.
+function cliffFalls(root) {
+  const positions=[], uv=[], indices=[]
+  for (const [station,width] of [[202,3.5],[415,10],[427,3.3],[696,6.6],[1078,9],[1533,7.1],[1812,5.8]]) {
+    const first=positions.length/3
+    for(let i=0;i<=32;i++) {
+      const drop=i/32, u=146-42*drop
+      const center=station+1.9*sin(drop*3.45)+1.1*drop*drop
+      const halfWidth=width*(.45+.24*drop+.12*sin(drop*8))
+      for (const side of [-1,1]) {
+        const along=center+side*halfWidth
+        const exposed=smooth(u,95,114)*(1-smooth(u,141,177))
+        const cut=pow(grain(along*.028,u*.028),2.8)*43+grain(along*.098,u*.085)*5
+        const x=farCoast(along)+u+cut*exposed-5-5*sin(drop*Math.PI)
+        positions.push(x,mainland(along,u)+.22,-along)
+        uv.push((side+1)*.5,drop)
+      }
+      const k=first+i*2
+      if(i)indices.push(k-2,k-1,k,k,k-1,k+1)
+    }
+  }
+  const geometry=new THREE.BufferGeometry()
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3))
+  geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2))
+  geometry.setIndex(indices)
+  const material=new THREE.ShaderMaterial({
+    fog:true,transparent:true,depthWrite:false,side:THREE.DoubleSide,
+    uniforms:THREE.UniformsUtils.merge([THREE.UniformsLib.fog,{fallTime:{value:0}}]),
+    vertexShader:`
+      varying vec2 ribbon;
+      #include <fog_pars_vertex>
+      void main(){ribbon=uv;vec4 mvPosition=modelViewMatrix*vec4(position,1.);gl_Position=projectionMatrix*mvPosition;
+      #include <fog_vertex>
+      }`,
+    fragmentShader:`
+      varying vec2 ribbon;uniform float fallTime;
+      #include <fog_pars_fragment>
+      void main(){
+        float x=ribbon.x+.036*sin(ribbon.y*14.-fallTime*.22)+.018*sin(ribbon.y*37.);
+        float streams=.4+.6*pow(.5+.5*sin(x*38.+2.8*sin(x*21.)+.7*sin(ribbon.y*17.-fallTime*.8)),1.5);
+        float edge=smoothstep(0.,.19,x)*(1.-smoothstep(.72,1.,x));
+        float ends=smoothstep(0.,.08,ribbon.y)*(1.-smoothstep(.78,1.,ribbon.y));
+        float spray=.5+.5*sin(ribbon.y*78.-fallTime*3.7+3.*sin(x*14.));
+        gl_FragColor=vec4(mix(vec3(.62,.78,.99),vec3(1.,.98,.87),streams),edge*ends*(.37+.53*streams)*(.89+.11*spray));
+        #include <colorspace_fragment>
+        #include <fog_fragment>
+      }`,
+  })
+  const falls=new THREE.Mesh(geometry,material)
+  root.add(falls)
+  return t=>{material.uniforms.fallTime.value=t}
+}
+
+function makeWater(root,sky) {
+  const time={value:0}
   const mat=new THREE.ShaderMaterial({
     uniforms:THREE.UniformsUtils.merge([THREE.UniformsLib.fog,{}]), fog:true,
     vertexShader:`
@@ -471,7 +525,8 @@ function makeWater(root,scene) {
       }`,
     fragmentShader:`
       varying vec3 seaPoint;
-      uniform float tide; uniform sampler2D skyImage; uniform float hasSky;
+      uniform float tide;
+      ${marineLight}
       #include <fog_pars_fragment>
       float hash21(vec2 p){p=fract(p*vec2(.1031,.1030));p+=dot(p,p.yx+33.33);return fract((p.x+p.y)*p.x);}
       float noise2(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash21(i),hash21(i+vec2(1,0)),f.x),mix(hash21(i+vec2(0,1)),hash21(i+vec2(1)),f.x),f.y);}
@@ -490,22 +545,19 @@ function makeWater(root,scene) {
         float ripple=noise2(waves*5.7 + vec2(.04,-.13)*tide);
         float swell=sin(dot(waves,vec2(.68,.82))+tide*.63+5.*m);
         float chop=sin(dot(waves,vec2(2.91,-1.93))-tide*1.24+4.*n);
-        vec3 norm=normalize(vec3(.11*swell+.10*(ripple-.5)+.065*chop,1.,.108*chop+.07*(n-.5)));
+        vec3 norm=normalize(vec3(.060*swell+.074*(ripple-.5)+.035*chop,1.,.055*chop+.048*(n-.5)));
         vec3 view=normalize(cameraPosition-seaPoint);
         vec3 refl=reflect(-view,norm);
-        float angle=1.34;
-        vec3 rd=vec3(refl.x*cos(angle)-refl.z*sin(angle),abs(refl.y),refl.x*sin(angle)+refl.z*cos(angle));
-        vec2 panoramaUv=vec2(atan(rd.z,rd.x)*.15915494+.5,asin(clamp(rd.y,-1.,1.))*.31830989+.5);
-        vec3 clouds=mix(vec3(.34,.58,.88),texture2D(skyImage,panoramaUv).rgb,hasSky);
-        vec3 deep=mix(vec3(.002,.016,.082),vec3(.004,.07,.16),m);
-        vec3 water=mix(vec3(.008,.195,.21),deep,sea);
-        float fresnel=.16+.43*pow(1.-max(0.,view.y),3.);
-        water+=fresnel*clouds*vec3(.20,.30,.65);
-        vec3 halfDir=normalize(view+normalize(vec3(.65,.31,-.72)));
+        vec3 clouds=marineLight(vec3(refl.x,abs(refl.y),refl.z));
+        vec3 deep=mix(vec3(.002,.015,.102),vec3(.002,.037,.173),m);
+        vec3 water=mix(vec3(.006,.156,.23),deep,sea);
+        float fresnel=.13+.43*pow(1.-max(0.,view.y),3.);
+        water+=fresnel*clouds*vec3(.57,.67,.98);
+        vec3 halfDir=normalize(view+normalize(vec3(-.03,.34,-.94)));
         float shine=pow(max(dot(norm,halfDir),0.),209.);
-        water+=vec3(1.45,1.21,.84)*shine;
+        water+=vec3(.81,.86,.92)*shine;
         float ridges=smoothstep(.54,.84,ripple)*smoothstep(.55,.96,n);
-        water+=vec3(.032,.085,.115)*ridges;
+        water+=vec3(.013,.034,.053)*ridges;
         float tex=noise2(p*vec2(.25,.41)+tide*.18);
         float front=depth+3.9*swell+tex*4.2;
         float shoal=(1.-smoothstep(.3,8.8,front))*(.30+.69*tex);
@@ -520,38 +572,12 @@ function makeWater(root,scene) {
       }`,
   })
   mat.uniforms.tide=time
-  mat.uniforms.skyImage=panorama
-  mat.uniforms.hasSky=photographed
+  Object.assign(mat.uniforms,sky.uniforms)
   const sea=new THREE.Mesh(new THREE.PlaneGeometry(3500,4500),mat)
   sea.rotation.x=-Math.PI/2
   sea.position.set(300,WATER,-900)
   root.add(sea)
-  return t=>{
-    time.value=t
-    if(scene.background?.isTexture && !photographed.value) {
-      panorama.value=scene.background; photographed.value=1
-    }
-  }
-}
-
-function horizonHaze(root,scene) {
-  // The photographed sky meets the same air colour as the most distant terrain.
-  // The far camera plane therefore disappears softly behind the sea horizon.
-  const veil=new THREE.Mesh(new THREE.SphereGeometry(1,24,14),new THREE.ShaderMaterial({
-    uniforms:{air:{value:scene.fog.color}},side:THREE.BackSide,transparent:true,depthWrite:false,
-    vertexShader:`varying vec3 dir;
-      void main(){dir=position;vec4 clip=projectionMatrix*modelViewMatrix*vec4(position,1.);gl_Position=clip.xyww;}`,
-    fragmentShader:`varying vec3 dir;uniform vec3 air;
-      void main(){float t=1.-smoothstep(.072,.235,normalize(dir).y);
-        gl_FragColor=vec4(air,t);
-        #include <colorspace_fragment>
-      }`,
-  }))
-  veil.frustumCulled=false
-  veil.renderOrder=-100
-  veil.scale.setScalar(400)
-  root.add(veil)
-  return s=>{const {x,y}=coastAt(s);veil.position.set(x,y+2.5,-s)}
+  return t=>{time.value=t}
 }
 
 export function createCoast(scene) {
@@ -559,28 +585,30 @@ export function createCoast(scene) {
   root.name='Cliffs of the western sea'
   scene.add(root)
   scene.background=new THREE.Color(0x99cce6)
-  scene.fog=new THREE.FogExp2(0xacbfd3,.00153)
+  scene.fog=new THREE.Fog(0x9aaac7,245,1230)
   const sun=new THREE.DirectionalLight(0xffe8ae,2.8)
   sun.position.set(105,143,-130)
   root.add(sun,new THREE.HemisphereLight(0xd4e8ff,0x8f7853,1.15))
   const sky=mountSky(scene,'coast')
-  const haze=horizonHaze(root,scene)
+  const marine=addMarineSky(root,scene)
   const ground=makeGround(root)
   const instances=groupInstances(root)
   architecture(instances)
   const plants=vegetation(root,instances)
-  const water=makeWater(root,scene)
+  const water=makeWater(root,marine)
+  const falls=cliffFalls(root)
   const spray=breakers(instances)
+  mistOnHorizon(root,marine)
   return {
     length:COURSE,
-    ready:sky.ready,
+    ready:Promise.all([sky.ready,marine.ready]),
     update(s) {
-      haze(s)
       ground(s)
       instances.update(s)
       plants.update(s)
       const t=performance.now()*.001
       water(t)
+      falls(t)
       spray(t)
     },
   }
