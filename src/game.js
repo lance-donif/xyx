@@ -36,7 +36,10 @@ function clock(seconds) {
     + '.' + pair(hundredths % 100);
 }
 
-let route = 'alpine', vehicle = 'moto', mode = 'menu', muted = load('muted') === 'true';
+const launchURL = new URL(location.href);
+let route = launchURL.searchParams.get('route') === 'coast' ? 'coast' : 'alpine';
+let vehicle = launchURL.searchParams.get('vehicle') === 'cycle' ? 'cycle' : 'moto';
+let mode = 'menu', muted = load('muted') === 'true';
 let scene, course = routes.alpine, environment, gates, rider, renderer, sunlight;
 const scenes = new Map();
 const riders = new Map();
@@ -56,10 +59,15 @@ function refreshPreview() {
     if (scene && mode !== 'racing') renderer.render(scene, camera);
   });
 }
-function selectScene() {
+function selectScene(updateURL = false) {
   if (rider) rider.group.removeFromParent();
   const dusk = route === 'alpine' && vehicle === 'cycle';
   const sceneKey = dusk ? 'dusk' : route;
+  if (updateURL) {
+    launchURL.searchParams.set('route', route);
+    launchURL.searchParams.set('vehicle', vehicle);
+    history.replaceState(history.state, '', launchURL);
+  }
   course = routes[sceneKey];
   if (!scenes.has(sceneKey)) {
     const next = new THREE.Scene();
@@ -138,7 +146,7 @@ function showMenu() {
 function finish() {
   const misses = gates.checkpoints.length - passed;
   const score = elapsed + misses * 3;
-  const key = 'best.ridge2.' + route + '.' + vehicle;
+  const key = 'best.ridge2.' + (course === routes.dusk ? 'dusk' : route) + '.' + vehicle;
   const previous = Number(load(key));
   const best = previous > 0 ? Math.min(previous, score) : score;
   save(key, String(best));
@@ -307,12 +315,12 @@ function bindControls() {
   document.querySelectorAll('[data-route]').forEach(b => b.onclick = () => {
     if (route === b.dataset.route) return;
     route = b.dataset.route;
-    selectScene();
+    selectScene(true);
   });
   document.querySelectorAll('[data-vehicle]').forEach(b => b.onclick = () => {
     if (vehicle === b.dataset.vehicle) return;
     vehicle = b.dataset.vehicle;
-    selectScene();
+    selectScene(true);
   });
   get('start').onclick = get('restart').onclick = get('replay').onclick = begin;
   get('pause').onclick = pause;
