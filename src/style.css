@@ -77,7 +77,7 @@ h1, h2 {
   color: var(--paper); margin: 0;
 }
 h1 {
-  font-size: clamp(88px,min(8.8vw,14.7vh),166px); line-height: .79; margin-left: -.02em; 
+  font-size: clamp(88px,min(8.8vw,14.7vh),166px); line-height: .79; margin-left: -.02em;
   text-shadow: 0 3px 24px rgba(0,0,0,.13);
 }
 .brief { margin: 21px 0 25px; display: flex; align-items: center; font-size: 13px; line-height: 1.5; color: #fff5df; text-shadow: 0 1px 5px #102925; }
