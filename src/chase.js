@@ -148,7 +148,12 @@ function boot() {
       if (e.timeStamp - g.t < 210 && Math.max(Math.abs(dx), Math.abs(dy)) >= threshold) {
         g.mode = 'swipe';
         run.action(Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'jump' : 'duck'));
-      } else if (e.timeStamp - g.t >= 210) g.mode = 'drag';
+      } else if (Math.abs(dy) >= threshold && Math.abs(dy) > Math.abs(dx)) {
+        g.mode = 'swipe';
+        run.action(dy < 0 ? 'jump' : 'duck');
+      } else if (Math.abs(dx) >= 5 && Math.abs(dx) > Math.abs(dy) && e.timeStamp - g.t >= 210) {
+        g.mode = 'drag';
+      }
     }
     if (g.mode === 'drag') run.shift(g.offset + dx * 8 / canvas.clientWidth);
   }
@@ -169,7 +174,7 @@ function boot() {
     const steer = Number(keys.has('d')) - Number(keys.has('a'));
     for (let i = 0; i < steps; i++) run.step(dt / steps, steer);
     if (best < s.best) {
-      best = s.best;
+      best = s.best = Math.max(readBest(), s.best);
       try { localStorage.setItem(BEST_KEY, String(best)); } catch {}
     }
     if (elapsed > .035) slowTime += Math.min(elapsed, .1);

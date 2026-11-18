@@ -48,3 +48,13 @@ test('the gap requires airtime across both edges', () => {
     assert.equal(run.state.loss, jump ? '' : 'fall');
   }
 });
+test('acting on the first jump or duck cue clears the obstacle', () => {
+  for (const [type, action, cue] of [['gap','jump','↑'], ['branch','duck','↓']]) {
+    const {run,ride} = setup([{id:2,type,at:40}]);
+    while (!run.state.hint.startsWith(cue) && run.state.distance < 40) run.step(1/60);
+    assert.ok(run.state.hint.startsWith(cue));
+    run.action(action);
+    ride(45);
+    assert.equal(run.state.phase,'playing');
+  }
+});
