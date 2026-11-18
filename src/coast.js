@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { terrainMap, createFoliageBatch } from './nature.js'
 import { mountSky } from './sky.js'
-import { addMarineSky, marineLight, mistOnHorizon } from './coast-sky.js'
+import { addMarineSky, coastSunDirection, marineLight, mistOnHorizon } from './coast-sky.js'
 import { addPortStreet, onPortStreet } from './coast-village.js'
 import { makeHarbour, reflectedShore } from './coast-shore.js'
 
@@ -363,7 +363,7 @@ function makeWater(root,sky,harbour) {
         vec3 water=mix(vec3(.006,.156,.23),deep,sea);
         float fresnel=.13+.43*pow(1.-max(0.,view.y),3.);
         water+=fresnel*clouds*vec3(.57,.67,.98);
-        vec3 halfDir=normalize(view+normalize(vec3(-.03,.34,-.94)));
+        vec3 halfDir=normalize(view+coastSun);
         float shine=pow(max(dot(norm,halfDir),0.),209.);
         water+=vec3(.81,.86,.92)*shine;
         float ridges=smoothstep(.54,.84,ripple)*smoothstep(.55,.96,n);
@@ -400,8 +400,8 @@ export function createCoast(scene) {
   scene.add(root)
   scene.background=new THREE.Color(0x99cce6)
   scene.fog=new THREE.Fog(0x9aaac7,245,1230)
-  const sun=new THREE.DirectionalLight(0xffe8ae,2.8)
-  sun.position.set(105,143,-130)
+  const sun=new THREE.DirectionalLight(0xffe8ae,3.8)
+  sun.position.copy(coastSunDirection).multiplyScalar(150)
   root.add(sun,new THREE.HemisphereLight(0xd4e8ff,0x8f7853,1.15))
   const sky=mountSky(scene,'coast')
   const marine=addMarineSky(root,scene)

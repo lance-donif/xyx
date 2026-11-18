@@ -1,12 +1,14 @@
 import * as THREE from 'three'
 
 const cloudFile = new URL('./assets/coast/cumulus.webp', import.meta.url).href
+export const coastSunDirection = new THREE.Vector3(-.03, .34, -.94).normalize()
 
 // The coastal light plate spans the seaward arc. The reverse arc closes it around the headland.
 // Use exactly the same direction mapping on the water so the cloud towers have reflections.
 export const marineLight = `
   uniform sampler2D marineSky;
   uniform float plateReady;
+  const vec3 coastSun = vec3(${coastSunDirection.toArray().join(', ')});
   vec3 marineLight(vec3 d){
     const float circle=6.2831853;
     float a=mod(atan(d.x,-d.z)+.07+circle,circle);
@@ -17,7 +19,7 @@ export const marineLight = `
     vec3 blue=mix(vec3(.24,.48,.82),vec3(.016,.075,.36),smoothstep(0.,.40,h));
     vec3 sky=mix(blue,plate,plateReady);
     sky=mix(sky,vec3(.014,.065,.32),smoothstep(.36,.88,h));
-    float solar=max(dot(d,normalize(vec3(-.03,.34,-.94))),0.);
+    float solar=max(dot(d,coastSun),0.);
     sky=mix(sky,vec3(1.,.96,.89),.20*pow(solar,15.)+.42*pow(solar,75.));
     vec3 mist=mix(vec3(.36,.45,.65),vec3(.78,.72,.67),pow(1.-u,5.));
     return mix(sky,mist,(1.-smoothstep(-.085,.026,h))*.88);
