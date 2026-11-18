@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { terrainMap, createFoliageBatch } from './nature.js'
 import { mountSky } from './sky.js'
 import { addMarineSky, marineLight, mistOnHorizon } from './coast-sky.js'
+import { makeHarbour, reflectedShore } from './coast-shore.js'
 
 const COURSE = 1200
 const WATER = -19
@@ -60,21 +61,6 @@ function hill(s,d) {
 
 function farCoast(s) {
   return 427 + 84*sin(s/167+.65) + 30*sin(s/66) + 9.1*sin(s/17)
-}
-
-function highland(s) {
-  return 184 + 21*sin(s/160) + 16*cos(s/88) + 5*grain(s*.06,1)
-}
-
-// A harbour, a terraced city, the vertical limestone wall and its high plateau.
-function mainland(s,u) {
-  const n = grain(s*.055,u*.08)-.5
-  if (u <= 0) return WATER + u*.44
-  const shelf = 0.36*min(u,104) + smooth(u,18,92)*(5*sin(s/48)+6*n)
-  if (u < 104) return WATER + shelf
-  const lip = 139 + 8*sin(s/24) + 5*sin(s/11)
-  const t = smooth(u,104,lip)
-  return THREE.MathUtils.lerp(WATER+shelf,highland(s),t) + sin(t*Math.PI)*18*n + max(0,u-lip)*.033
 }
 
 function makeGridMesh(parent, rows, columns, point, material) {
@@ -172,24 +158,6 @@ function makeGround(root) {
     return [coastAt(s).x+d,y,-s,shade.r,shade.g,shade.b,s*.081+d*.015+grain(s*.031,t*3)*.6,y*.092+grain(s*.024,t*3.8)*.45]
   },limestone)
 
-  // The far shore is mostly seen at glancing angles. Equal world-space units on X/Y keep the cliff grain readable.
-  const rockBlue=linear(0x7083aa), foot=linear(0xcfa373), top=linear(0x89917f)
-  const steps=[-12,-3,0,3,9,18,32,49,71,90,103,107,111,115,120,125,130,135,140,147,158,180,220,320,510]
-  grid(root,line(-1250,COURSE+1510,6),steps,(s,u)=>{
-    const y=mainland(s,u)
-    const crag = (grain(s*.091,u*.13)+grain(s*.028,u*.1))*.5
-    const strata = .5+.5*sin(y*.33+s*.017+3*sin(s*.030))
-    shade.copy(foot).lerp(rockBlue,smooth(u,88,113)).lerp(top,smooth(u,142,160))
-    shade.multiplyScalar(.58+.63*crag+.17*strata)
-    const exposed=smooth(u,95,114)*(1-smooth(u,141,177))
-    const crevasse=pow(grain(s*.028,u*.028),2.8)*43+grain(s*.098,u*.085)*5
-    const ridge=farCoast(s)+u+exposed*crevasse
-    const darkRun=pow(.5+.5*sin(s*.115+.6*sin(y*.045)+3.8*grain(s*.035,u*.022)),4.)
-    shade.multiplyScalar(1.-exposed*(.35*smooth(crevasse,6,18)+.30*darkRun))
-    shade.r*=1.-.11*exposed
-    shade.b*=1.+.14*exposed
-    return [ridge,y,-s,shade.r,shade.g,shade.b,s*.028+u*.016,(y*.83+u*.27)*.030]
-  },limestone)
   return s=>{
     for(const {mesh,detail,far,from,to} of sections) {
       const index=s<from-200 || s>to+75 ? far : detail
@@ -205,43 +173,6 @@ function canvasMap(w,h,painter) {
   const map=new THREE.CanvasTexture(canvas)
   map.colorSpace=THREE.SRGBColorSpace
   return map
-}
-
-function makeFacade() {
-  return canvasMap(128,128,(ctx,w,h)=>{
-    const rnd=randomSequence(724)
-    ctx.fillStyle='#efead7';ctx.fillRect(0,0,w,h)
-    for(let i=0;i<1300;i++){
-      ctx.fillStyle='rgba(91,74,56,'+(rnd()*.19)+')'
-      ctx.fillRect(rnd()*w,rnd()*h,1+rnd()*3,1)
-    }
-    for(let r=0;r<3;r++) for(let c=0;c<4;c++){
-      const x=c*30+10,y=r*36+13
-      ctx.fillStyle='#947e61';ctx.fillRect(x-2,y-2,13,20)
-      ctx.fillStyle=(r+c*2)%5===0?'#ffe2a0':c===3&&r===1?'#efac54':'#4b5755';ctx.fillRect(x,y,9,16)
-      ctx.fillStyle='#c9bc9f';ctx.fillRect(x+4,y,1,16)
-      ctx.fillStyle='#b8a48b';ctx.fillRect(x-3,y+17,15,2)
-    }
-    ctx.fillStyle='#c6b699';ctx.fillRect(0,119,w,9)
-  })
-}
-
-function archShape() {
-  const shape=new THREE.Shape()
-  // Each masonry unit includes two continuous legs below the water line.
-  // Adjacent units can vary in span as the aqueduct turns into the cliff.
-  shape.moveTo(-.5,-6);shape.lineTo(-.415,-6);shape.lineTo(-.415,0)
-  shape.absarc(0,0,.415,Math.PI,0,true)
-  shape.lineTo(.415,-6);shape.lineTo(.5,-6);shape.lineTo(.5,.50);shape.lineTo(-.5,.50);shape.closePath()
-  const geo=new THREE.ExtrudeGeometry(shape,{depth:1,bevelEnabled:false,curveSegments:12})
-  geo.translate(0,0,-.5)
-  return geo
-}
-
-function roofForm() {
-  const s=new THREE.Shape()
-  s.moveTo(-.54,0);s.lineTo(0,1);s.lineTo(.54,0);s.closePath()
-  return new THREE.ExtrudeGeometry(s,{depth:1.08,bevelEnabled:false}).translate(0,0,-.54)
 }
 
 function groupInstances(root) {
@@ -276,88 +207,6 @@ function groupInstances(root) {
   return {batch, update(s) {
     for (const {mesh,from,to,range} of sections) mesh.visible=to>s-90 && from<s+range
   }}
-}
-
-function architecture(instances) {
-  const rnd=randomSequence(189291)
-  const plain=new THREE.MeshStandardMaterial({roughness:.9})
-  const walls=new THREE.MeshStandardMaterial({map:makeFacade(),roughness:.91})
-  const stone=new THREE.MeshStandardMaterial({color:0xf7ebd5,roughness:.94})
-  const monument=(geometry,material)=>instances.batch(geometry,material,Infinity,240)
-  const block=monument(new THREE.BoxGeometry(),plain)
-  const house=monument(new THREE.BoxGeometry(),walls)
-  const roof=monument(roofForm(),plain)
-  const arch=monument(archShape(),stone)
-  const spire=monument(new THREE.ConeGeometry(1,1,6),plain)
-  const pier=monument(new THREE.CylinderGeometry(.86,1,1,8),stone)
-  const facade=[0xffcd81,0xf3ac60,0xf4c898,0xffdaaa,0xe09a70,0xcd8359]
-  const slate=[0x8c5545,0xb96940,0x9b5b39,0xc67845,0x736b63,0x65717a]
-  function conduitOffset(s,from,to,offset,upper) {
-    const end=min(s-from,to-s)
-    return offset+9*sin(s/85)+(1-smooth(end,0,upper?68:47))*(upper?91:111)
-  }
-  for(let t=-225;t<COURSE+1350;t+=7.8) {
-    for(let row=0;row<11;row++) {
-      if (rnd()<.13 || abs(sin(t/137 + row*.05))<.16) continue
-      const s=t+2*rnd() + row*.45, u=2+row*8.4 + 4*sin(t/36+row)*sin(row*.8)
-      const phase=THREE.MathUtils.euclideanModulo(s+560,482)
-      const start=s-phase
-      const inArcade=phase>45 && phase<263 && abs(u-conduitOffset(s,start+50,start+253,8,false))<6
-      const highStart=phase<140 ? start-482 : start
-      const nearViaduct=(phase>139 || phase<68) && abs(u-conduitOffset(s,highStart+145,highStart+544,60,true))<7
-      if(inArcade || nearViaduct) continue
-      const x=farCoast(s)+u, y=mainland(s,u), w=3.7+3.4*rnd(), h=5.3+5*rnd()+2*(row%3===1), d=4+2.5*rnd(), rot=-.30+.55*rnd()
-      const clr=facade[floor(rnd()*facade.length)]
-      house.place(x,y+h*.47,-s,w,h,d,clr,rot)
-      roof.place(x,y+h*.97,-s,w,h*(.23+rnd()*.12),d,slate[floor(rnd()*slate.length)],rot)
-      if (row%4===1 && rnd()>.58) block.place(x+w*.2,y+h*1.13,-s-.6,.55,1.53,.71,clr,rot)
-    }
-  }
-
-  // A low harbour arcade, a second raised conduit and the skyline of the old hill town.
-  function conduit(from,to,bay,deck,offset,tint,upper) {
-    for(let s=from;s<to;s+=bay) {
-      const x0=farCoast(s)+conduitOffset(s,from,to,offset,upper)
-      const x1=farCoast(s+bay)+conduitOffset(s+bay,from,to,offset,upper)
-      const span=Math.hypot(x1-x0,bay), yaw=Math.atan2(bay,x1-x0)
-      const top=deck+3*sin(s/190), spring=top-.50*span
-      const footY=WATER-7
-      const x=(x0+x1)*.5
-      arch.place(x,spring,-s-bay/2,span,span,4.5,tint,yaw)
-      block.place(x0,(footY+spring)/2,-s,span*.16,max(1,spring-footY),5.2,tint,yaw)
-      block.place(x0,spring-.35,-s,span*.205,.8,5.75,0xddc59a,yaw)
-      block.place(x,top+.6,-s-bay/2,span+.3,1.3,5.6,0xddc59a,yaw)
-      if (s+bay >= to) {
-        const tipBase=WATER-7
-        block.place(x1,(tipBase+spring)*.5,-s-bay,span*.16,max(1,spring-tipBase),5.2,tint,yaw)
-      }
-      if(upper && floor((s-from)/bay)%5===2) {
-        pier.place(x0,top+4,-s,2.6,8,2.6,0xc2ac89,yaw)
-        spire.place(x0,top+12,-s,2.05,9,2.05,0x455660,yaw)
-      }
-    }
-  }
-  for (let delta=-560;delta<COURSE+850;delta+=482) {
-    conduit(delta+50,delta+253,14,21,8,0xcabc9b,false)
-    conduit(delta+145,delta+544,24,84,60,0xc4b793,true)
-    // Slender, weathered bell towers rise through the roofs.
-    for (const [u,off,h] of [[26,178,41],[54,207,58],[82,221,36],[35,346,28],[92,413,46]]) {
-      const s=delta+off, x=farCoast(s)+u, y=mainland(s,u)
-      house.place(x,y+h*.25,-s,8.4,h*.5,8.8,0xe7cfab,.24)
-      block.place(x,y+h*.48,-s,9.5,1.6,9.5,0xc7ae8c,.24)
-      house.place(x,y+h*.62,-s,5.9,h*.32,6.3,0xd8c49b,.24)
-      spire.place(x,y+h*.90,-s,4.2,h*.38,4.2,0x535f65,.24)
-    }
-    // Ruined megalithic belvedere on the high promontory.
-    const s=delta+249,x=farCoast(s)+172,y=mainland(s,172)
-    for(const dx of [-10,10]) for(const dz of [-5,5]) {
-      pier.place(x+dx,y+12,-s+dz,2.55,24,2.55,0xa99c83)
-      block.place(x+dx,y+24,-s+dz,6,1.6,6,0xd5bd99)
-    }
-    block.place(x,y+26,-s,30,3.8,16,0xb5ab94)
-    block.place(x,y+28.5,-s,33,1.7,18,0xc4bba0)
-  }
-  for(const item of [block,house,roof,arch,spire,pier]) item.flush()
 }
 
 function vegetation(root, instances) {
@@ -457,60 +306,7 @@ function breakers(instances) {
   return t=>{clock.value=t}
 }
 
-// Thin sheets of water follow the bends of the distant cliff face and disappear into the harbour.
-function cliffFalls(root) {
-  const positions=[], uv=[], indices=[]
-  for (const [station,width] of [[202,3.5],[415,10],[427,3.3],[696,6.6],[1078,9],[1533,7.1],[1812,5.8]]) {
-    const first=positions.length/3
-    for(let i=0;i<=32;i++) {
-      const drop=i/32, u=146-42*drop
-      const center=station+1.9*sin(drop*3.45)+1.1*drop*drop
-      const halfWidth=width*(.45+.24*drop+.12*sin(drop*8))
-      for (const side of [-1,1]) {
-        const along=center+side*halfWidth
-        const exposed=smooth(u,95,114)*(1-smooth(u,141,177))
-        const cut=pow(grain(along*.028,u*.028),2.8)*43+grain(along*.098,u*.085)*5
-        const x=farCoast(along)+u+cut*exposed-5-5*sin(drop*Math.PI)
-        positions.push(x,mainland(along,u)+.22,-along)
-        uv.push((side+1)*.5,drop)
-      }
-      const k=first+i*2
-      if(i)indices.push(k-2,k-1,k,k,k-1,k+1)
-    }
-  }
-  const geometry=new THREE.BufferGeometry()
-  geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3))
-  geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2))
-  geometry.setIndex(indices)
-  const material=new THREE.ShaderMaterial({
-    fog:true,transparent:true,depthWrite:false,side:THREE.DoubleSide,
-    uniforms:THREE.UniformsUtils.merge([THREE.UniformsLib.fog,{fallTime:{value:0}}]),
-    vertexShader:`
-      varying vec2 ribbon;
-      #include <fog_pars_vertex>
-      void main(){ribbon=uv;vec4 mvPosition=modelViewMatrix*vec4(position,1.);gl_Position=projectionMatrix*mvPosition;
-      #include <fog_vertex>
-      }`,
-    fragmentShader:`
-      varying vec2 ribbon;uniform float fallTime;
-      #include <fog_pars_fragment>
-      void main(){
-        float x=ribbon.x+.036*sin(ribbon.y*14.-fallTime*.22)+.018*sin(ribbon.y*37.);
-        float streams=.4+.6*pow(.5+.5*sin(x*38.+2.8*sin(x*21.)+.7*sin(ribbon.y*17.-fallTime*.8)),1.5);
-        float edge=smoothstep(0.,.19,x)*(1.-smoothstep(.72,1.,x));
-        float ends=smoothstep(0.,.08,ribbon.y)*(1.-smoothstep(.78,1.,ribbon.y));
-        float spray=.5+.5*sin(ribbon.y*78.-fallTime*3.7+3.*sin(x*14.));
-        gl_FragColor=vec4(mix(vec3(.62,.78,.99),vec3(1.,.98,.87),streams),edge*ends*(.37+.53*streams)*(.89+.11*spray));
-        #include <colorspace_fragment>
-        #include <fog_fragment>
-      }`,
-  })
-  const falls=new THREE.Mesh(geometry,material)
-  root.add(falls)
-  return t=>{material.uniforms.fallTime.value=t}
-}
-
-function makeWater(root,sky) {
+function makeWater(root,sky,harbour) {
   const time={value:0}
   const mat=new THREE.ShaderMaterial({
     uniforms:THREE.UniformsUtils.merge([THREE.UniformsLib.fog,{}]), fog:true,
@@ -527,12 +323,13 @@ function makeWater(root,sky) {
       varying vec3 seaPoint;
       uniform float tide;
       ${marineLight}
+      ${reflectedShore}
       #include <fog_pars_fragment>
       float hash21(vec2 p){p=fract(p*vec2(.1031,.1030));p+=dot(p,p.yx+33.33);return fract((p.x+p.y)*p.x);}
       float noise2(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash21(i),hash21(i+vec2(1,0)),f.x),mix(hash21(i+vec2(0,1)),hash21(i+vec2(1)),f.x),f.y);}
       void main(){
         vec2 p=seaPoint.xz;float s=-p.y;
-        float farX=427.+84.*sin(s/167.+.65)+30.*sin(s/66.)+9.1*sin(s/17.);
+        float farX=bayEdge(s);
         float woodsX=52.*sin((s+18.)/56.)+13.*sin((s+5.)/31.)+20.*sin(s/140.);
         float headland=(s-155.)/44.;
         woodsX+=.84*(s-155.)*exp(-headland*headland);
@@ -549,6 +346,8 @@ function makeWater(root,sky) {
         vec3 view=normalize(cameraPosition-seaPoint);
         vec3 refl=reflect(-view,norm);
         vec3 clouds=marineLight(vec3(refl.x,abs(refl.y),refl.z));
+        vec4 cliff=cliffReflection(seaPoint,refl);
+        clouds=mix(clouds,cliff.rgb,cliff.a*.85);
         vec3 deep=mix(vec3(.002,.015,.102),vec3(.002,.037,.173),m);
         vec3 water=mix(vec3(.006,.156,.23),deep,sea);
         float fresnel=.13+.43*pow(1.-max(0.,view.y),3.);
@@ -569,10 +368,14 @@ function makeWater(root,sky) {
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
         #include <fog_fragment>
+        if(vFogDepth>860.) {
+          vec3 horizon=sRGBTransferOETF(vec4(marineLight(normalize(seaPoint-cameraPosition)),1.)).rgb;
+          gl_FragColor.rgb=mix(gl_FragColor.rgb,horizon,smoothstep(860.,1230.,vFogDepth));
+        }
       }`,
   })
   mat.uniforms.tide=time
-  Object.assign(mat.uniforms,sky.uniforms)
+  Object.assign(mat.uniforms,sky.uniforms,{shoreReady:harbour.uniforms.shoreReady,shorePlate:harbour.uniforms.shorePlate})
   const sea=new THREE.Mesh(new THREE.PlaneGeometry(3500,4500),mat)
   sea.rotation.x=-Math.PI/2
   sea.position.set(300,WATER,-900)
@@ -593,22 +396,21 @@ export function createCoast(scene) {
   const marine=addMarineSky(root,scene)
   const ground=makeGround(root)
   const instances=groupInstances(root)
-  architecture(instances)
+  const harbour=makeHarbour(root,scene,farCoast,WATER,marine)
   const plants=vegetation(root,instances)
-  const water=makeWater(root,marine)
-  const falls=cliffFalls(root)
+  const water=makeWater(root,marine,harbour)
   const spray=breakers(instances)
   mistOnHorizon(root,marine)
   return {
     length:COURSE,
-    ready:Promise.all([sky.ready,marine.ready]),
+    ready:Promise.all([sky.ready,marine.ready,harbour.ready]),
     update(s) {
       ground(s)
       instances.update(s)
       plants.update(s)
       const t=performance.now()*.001
       water(t)
-      falls(t)
+      harbour.update(t)
       spray(t)
     },
   }
