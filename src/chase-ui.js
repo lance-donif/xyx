@@ -64,7 +64,6 @@ export function createChaseUI({ start, pause, resume, restart }) {
         event.clientY < bounds.top || event.clientY > bounds.bottom) help.close();
   });
 
-  startButton.disabled = false;
   startButton.addEventListener('click', start);
   pauseButton.addEventListener('click', pause);
   resumeButton.addEventListener('click', resume);
@@ -119,5 +118,5 @@ export function createChaseUI({ start, pause, resume, restart }) {
     }
   }
 
-  return { update };
+  return { update, ready() { startButton.disabled = false; } };
 }

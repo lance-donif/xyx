@@ -33,10 +33,9 @@ export function terrainMap(name) {
 const sectionSize = 84
 
 // Crossed, slightly bowed leaf sprays retain thickness when viewed along the road or overhead.
-export function createFoliageBatch(parent) {
+export function createFoliageBatch(parent, materials = new Map()) {
   const bins = new Map()
   const visibleSections = []
-  const materials = new Map()
   const n = new THREE.Vector3()
 
   function bucket(kind, z) {

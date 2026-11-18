@@ -173,10 +173,10 @@ function brokenViaduct(batch,p) {
   }
 }
 
-function makeSection(segment,events,sample,materials) {
+function makeSection(segment,events,sample,materials,foliageMaterials) {
   const {start,end}=segment
   const random=generator(Math.round(segment.start*100)+41929)
-  const group=new THREE.Group(),batch=makeBatch(group,materials),leaves=createFoliageBatch(group)
+  const group=new THREE.Group(),batch=makeBatch(group,materials),leaves=createFoliageBatch(group,foliageMaterials)
   const coast=segment.biome==='coast'
   const gaps=events.filter(e=>e.type==='gap' && e.at>start-20 && e.at<end+20)
   const turns=events.filter(e=>e.type==='turn' && e.at>start-24 && e.at<end+24)
@@ -398,11 +398,12 @@ export function createChaseWorld(scene) {
   const sky=mountSky(scene,'alpine'),far=horizon(root)
   const stone=map=>new THREE.MeshLambertMaterial({map:terrainMap(map),vertexColors:true,side:THREE.DoubleSide})
   const materials={stone:stone('rock'),cliff:stone('rock'),bark:stone('bark'),wood:stone('bark'),turf:stone('grass')}
+  const foliageMaterials=new Map()
   const chunks=new Map()
   function disposeGroup(g){
     const used=new Set()
     g.traverse(o=>{o.geometry?.dispose();if(o.material)used.add(o.material)})
-    for(const m of used)if(!Object.values(materials).includes(m))m.dispose()
+    for(const m of used)if(!Object.values(materials).includes(m) && ![...foliageMaterials.values()].includes(m))m.dispose()
     g.removeFromParent()
   }
   return {
@@ -419,7 +420,7 @@ export function createChaseWorld(scene) {
           coastal=max(coastal,enter*leave)
         }
         if(!chunks.has(s.id)){
-          const mesh=makeSection(s,events,sample,materials)
+          const mesh=makeSection(s,events,sample,materials,foliageMaterials)
           chunks.set(s.id,mesh);root.add(mesh)
         }
       }
@@ -433,7 +434,7 @@ export function createChaseWorld(scene) {
       for(const g of chunks.values())disposeGroup(g)
       chunks.clear()
       disposeGroup(root)
-      for(const m of Object.values(materials))m.dispose()
+      for(const m of [...Object.values(materials),...foliageMaterials.values()])m.dispose()
       far.dispose();sun.shadow.dispose();sky.dispose()
     },
   }

@@ -124,9 +124,26 @@ function boot() {
   resize();
   // The first preview frame can precede asynchronous texture decoding.
   world.ready.then(() => {
-    if (run.state.phase !== 'ready') return;
-    renderer.compile(scene, camera);
+    // The menu's 1px draw includes coastal foliage and timber obstacles, whose
+    // depth programs are selected only in an actual shadow pass.
+    const previewDistance = 285;
+    const p = course.sample(previewDistance);
+    const q = course.sample(previewDistance + 12);
+    const preview = camera.clone();
+    preview.position.set(p.x, p.y + 3, p.z);
+    preview.lookAt(q.x, q.y + 1, q.z);
+    course.update(previewDistance);
+    world.update(course.segments, previewDistance, course.events, course.sample);
+    props.update(course.events, course.coins, run.collected, previewDistance, course.sample, 0);
+    renderer.compile(scene, preview);
+    renderer.setScissor(0, 0, 1, 1);
+    renderer.setScissorTest(true);
+    renderer.shadowMap.needsUpdate = true;
+    renderer.render(scene, preview);
+    renderer.setScissorTest(false);
+    course.update(0);
     draw(0);
+    ui.ready();
   });
   THREE.DefaultLoadingManager.onLoad = () => { if (run.state.phase === 'ready') draw(0); };
   addEventListener('resize', resize);
