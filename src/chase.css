@@ -132,8 +132,8 @@ noscript { position: absolute; inset: 0; z-index: 10; display: grid; place-items
   .brand svg { width: 32px; }
   .brand b { font-size: 25px; }
   .round { height: 39px; width: 39px; }
-  [data-phase="ready"] .scrim::before { background: linear-gradient(0deg, #0d221f 0%, #0d211fe6 14%, #0b201cab 29%, transparent 55%); }
-  .launch { inset: auto 0 0; padding-bottom: max(15px,env(safe-area-inset-bottom)); }
+  [data-phase="ready"] .scrim::before { background: linear-gradient(180deg, #0d221fe6 0%, #0d211fd6 14%, #0b201ca6 28%, transparent 47%); }
+  .launch { inset: max(78px,calc(env(safe-area-inset-top) + 62px)) 0 auto; padding-bottom: 0; }
   .launch-actions { width: 100%; }
   .wide { display: none; }
   .edition { margin-bottom: 8px; font-size: 11px; }
