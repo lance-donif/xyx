@@ -1,563 +1,498 @@
 import * as THREE from 'three'
+import { createFoliageBatch, terrainMap } from './nature.js'
+import { buildVillage } from './village.js'
+import { mountSky } from './sky.js'
 
 const LENGTH = 1200
-const FIRST = -64
-const LAST = LENGTH + 150
+const FIRST = -76
+const LAST = LENGTH + 175
 const TAU = Math.PI * 2
+const { sin, cos, abs } = Math
+const smooth = (a, b, t) => THREE.MathUtils.smoothstep(t, a, b)
 
-// x is the centre of the lane at z = -s. The road surface itself stays level across its width.
 export function roadAt(s) {
   return {
-    x: 18 * Math.sin(s / 72) + 9 * Math.sin(s / 38 + 0.65) - 9 * Math.sin(0.65),
-    y: -0.085 * s + 2.6 * Math.sin(s / 43) - 0.9 * Math.sin(s / 21),
+    x: 12 * sin(s / 67 + .3) + 15 * sin(s / 109 - .58) + 4.7 * sin(s / 31 - .6),
+    y: 53 - .068 * s - 23 * (Math.tanh((s - 35) / 86) + .386)
+      - 23 * smooth(325, 496, s) - 20 * smooth(721, 945, s) - 14 * smooth(1005, 1165, s)
+      + 1.35 * sin(s / 60),
   }
 }
 
-function groundAt(x, s) {
-  const road = roadAt(s)
-  const dx = x - road.x
-  const d = Math.max(0, Math.abs(dx) - 4.65)
-  const ridge = dx < 0 ? -0.15 : 0.044
-  return road.y - 0.12 + d * ridge +
-    (Math.sin(x * 0.083 + s * 0.025) * 1.6 + Math.cos(s * 0.067 - x * 0.029) * 0.95) * Math.min(1, d / 11)
+function ridgeDepth(s) {
+  return 1.2 + 35 * (1 - smooth(130, 363, s)) + 27 * smooth(662, 785, s) * (1 - smooth(894, 1082, s))
 }
 
-function makeRandom(seed) {
+// An eroded, grass-topped ridge carries the asphalt. The hamlets are on the fields below.
+function groundAt(x, s) {
+  const r = roadAt(s)
+  const lateral = x - r.x
+  const d = Math.max(0, abs(lateral) - 5.05)
+  const envelope = 1 - Math.exp(-Math.pow(d / (10.5 + 2.3 * sin(s / 45)), 1.5))
+  const undulation = sin(x * .033 + s * .019) * 1.8 + cos(s * .027 - x * .017) * 1.4
+  const valleySide = smooth(78, 235, d) * (11 + 9 * sin(s * .011 + lateral * .014))
+  return r.y - .09 + .18*Math.exp(-((abs(lateral)-5.32)**2)/.67) - ridgeDepth(s) * envelope + undulation * smooth(12, 44, d) + valleySide
+}
+
+function random(seed) {
   return () => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
     return seed / 4294967296
   }
 }
 
-function triangleMesh(points, tones, material) {
-  const geo = new THREE.BufferGeometry()
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(points, 3))
-  if (tones) geo.setAttribute('color', new THREE.Float32BufferAttribute(tones, 3))
-  geo.computeVertexNormals()
-  return new THREE.Mesh(geo, material)
+function geometry(positions, indices, colors, uvs) {
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  if (colors) g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+  if (uvs) g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  g.setIndex(indices)
+  g.computeVertexNormals()
+  return g
 }
 
-function paintNoise() {
-  const size = 128
-  const bytes = new Uint8Array(size * size * 4)
-  const rand = makeRandom(7304)
-  for (let i = 0; i < bytes.length; i += 4) {
-    const n = 182 + Math.floor(rand() * 67)
-    bytes.set([n, n, n, 255], i)
-  }
-  const tex = new THREE.DataTexture(bytes, size, size)
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-  tex.magFilter = THREE.LinearFilter
-  tex.minFilter = THREE.LinearMipmapLinearFilter
-  tex.generateMipmaps = true
-  tex.needsUpdate = true
-  return tex
-}
-
-function makeRoad(scene, shade) {
-  const points = [], uv = [], index = [], colors = []
-  const strips = [
-    [-5.05, -4.04, '#acaa8d'], [-4.04, -3.96, '#595d58'],
-    [-3.96, -3.89, '#f8efda'], [-3.89, 3.89, '#646970'],
-    [3.89, 3.96, '#f8efda'], [3.96, 4.04, '#595d58'], [4.04, 5.05, '#acaa8d'],
-  ]
-  function strip(s, end, a, b, color, lift = 0) {
-    const p = roadAt(s), q = roadAt(end), first = points.length / 3
-    points.push(p.x+a,p.y+lift,-s, p.x+b,p.y+lift,-s, q.x+b,q.y+lift,-end, q.x+a,q.y+lift,-end)
-    uv.push(a/4,s/4,b/4,s/4,b/4,end/4,a/4,end/4)
-    const c = new THREE.Color(color)
+function makeRoad(scene, shadows) {
+  const points = [], uvs = [], indices = [], colors = []
+  function strip(s, a, b, tone, lift = 0) {
+    const p = roadAt(s), q = roadAt(s + 2), first = points.length / 3
+    points.push(p.x+a,p.y+lift,-s,p.x+b,p.y+lift,-s,q.x+b,q.y+lift,-s-2,q.x+a,q.y+lift,-s-2)
+    uvs.push(a/3,s/3,b/3,s/3,b/3,(s+2)/3,a/3,(s+2)/3)
+    const c = new THREE.Color(tone)
     for (let i = 0; i < 4; i++) colors.push(c.r,c.g,c.b)
-    index.push(first, first+1, first+2, first, first+2, first+3)
+    indices.push(first,first+1,first+2,first,first+2,first+3)
   }
   for (let s = FIRST; s < LAST; s += 2) {
-    strips.forEach(([a,b,c]) => strip(s, s+2, a,b,c))
-    if (s % 10 === 0) strip(s, s+2, -0.054, 0.054, '#e2ddc8', 0.015)
+    strip(s,-4.18,-3.96,'#bdb498')
+    strip(s,-3.96,3.96,'#f1e4c9')
+    strip(s,3.96,4.18,'#bdb498')
+    for (const x of [-3.88, 3.8]) strip(s,x,x+.08,'#fffbed',.014)
+    if (s % 10 === 0) strip(s,-.053,.053,'#fffbed',.014)
   }
-  const mesh = triangleMesh(points, colors, new THREE.MeshLambertMaterial({vertexColors:true, map: paintNoise()}))
-  mesh.geometry.setIndex(index)
-  mesh.geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv,2))
-  mesh.geometry.computeVertexNormals()
-  shade.apply(mesh.material)
-  scene.add(mesh)
+  const material = new THREE.MeshLambertMaterial({vertexColors:true, map:terrainMap('asphalt')})
+  shadows.apply(material)
+  // White paint is applied after the asphalt texture in the shader.
+  material.userData.paint = true
+  const road=new THREE.Mesh(geometry(points,indices,colors,uvs),material)
+  road.receiveShadow=true; scene.add(road)
 }
 
-function makeMeadows(scene, shade) {
-  const rand = makeRandom(71522)
-  const points = [], colors = []
-  const offsets = [-230,-180,-130,-99,-71,-49,-35,-23,-15,-9,-5,0,5,9,15,23,35,49,71,99,130,180,230]
-  const rows = []
-  for (let s = FIRST - 6; s <= LAST + 8; s += 6) {
-    rows.push(offsets.map(dx => {
-      const along = s + (Math.abs(dx) > 7 ? rand()*3-1.5 : 0)
-      const x = roadAt(along).x + dx + (Math.abs(dx) > 9 ? rand()*2-1 : 0)
-      return [x, groundAt(x, along), -along]
-    }))
-  }
-  const shades = ['#a8b95f','#adbf66','#91aa54','#809d4e','#9db553','#b4bd66']
-  for (let r=1; r<rows.length; r++) {
-    for (let j=1; j<offsets.length; j++) {
-      const a=rows[r-1][j-1], b=rows[r-1][j], c=rows[r][j], d=rows[r][j-1]
-      const sector = Math.floor((a[0] + 260 + Math.sin(r*0.09)*13)/21) + Math.floor(r/6)*3
-      const tint = new THREE.Color(shades[Math.abs(sector)%shades.length])
-      if (Math.abs(offsets[j]) < 10) tint.set('#a7b66a')
-      for (const tri of [[a,b,c],[a,c,d]]) {
-        const brightness = .98 + rand()*.035
-        for (const p of tri) {
-          points.push(...p); colors.push(tint.r*brightness,tint.g*brightness,tint.b*brightness)
-        }
+function makeTerrain(scene, shadows) {
+  const offsets=[-330,-270,-217,-172,-138,-110,-87,-70,-54,-43,-34,-27,-22,-18,-14,-11,-9,-7.5,-6,-5,-4.42,-4.07,0,4.07,4.42,5,6,7.5,9,11,14,18,22,27,34,43,54,70,87,110,138,172,217,270,330]
+  const points=[], uv=[], colors=[], indices=[]
+  const moss=new THREE.Color('#fff9aa'), stone=new THREE.Color('#dbcaa2')
+  for (let s=FIRST-6, row=0; s<=LAST+9; s+=3,row++) {
+    for (let j=0; j<offsets.length; j++) {
+      const d=offsets[j], x=roadAt(s).x+d, y=groundAt(x,s)
+      points.push(x,y,-s)
+      uv.push((x+y*.28)/3.3,(s+y*.22)/3.3)
+      const field=Math.floor((x+310+sin(s/72)*4)/26)+Math.floor((s+92+cos(x/70)*5)/42)*3
+      const amt=(sin(field*1253.35)*.5+.5)
+      const color=new THREE.Color().setHSL(.215+amt*.032,.21+amt*.08,.72+amt*.12,THREE.SRGBColorSpace)
+      color.lerp(stone, smooth(11,19,abs(d))*(1-smooth(20,31,abs(d)))*ridgeDepth(s)/42)
+      color.lerp(moss,(1-smooth(5,8,abs(d)))*.70)
+      const noise=.975+sin(s*.32 + d*.74)*.024
+      colors.push(color.r*noise,color.g*noise,color.b*noise)
+      if(row && j){
+        const i=row*offsets.length+j, n=offsets.length
+        indices.push(i-n-1,i-n,i,i-n-1,i,i-1)
       }
     }
   }
-  const material = new THREE.MeshLambertMaterial({vertexColors:true})
-  shade.apply(material)
-  scene.add(triangleMesh(points, colors, material))
+  const material=new THREE.MeshLambertMaterial({map:terrainMap('grass'),vertexColors:true})
+  material.userData.fields=true
+  shadows.apply(material)
+  const meadows=new THREE.Mesh(geometry(points,indices,colors,uv),material)
+  meadows.receiveShadow=true;scene.add(meadows)
 }
 
-function prism() {
-  const shape = new THREE.Shape()
-  shape.moveTo(-.5,0); shape.lineTo(.5,0); shape.lineTo(0,1); shape.closePath()
-  return new THREE.ExtrudeGeometry(shape, {bevelEnabled:false,depth:1}).translate(0,0,-.5)
-}
-
-function masonry(span, radius) {
-  const sh = new THREE.Shape()
-  sh.moveTo(-span/2,0); sh.lineTo(span/2,0); sh.lineTo(span/2,-48)
-  sh.lineTo(radius,-48); sh.lineTo(radius,-9)
-  sh.absarc(0,-9,radius,0,Math.PI,false)
-  sh.lineTo(-radius,-48); sh.lineTo(-span/2,-48); sh.closePath()
-  return new THREE.ExtrudeGeometry(sh,{bevelEnabled:false,depth:2.8,curveSegments:12}).translate(0,0,-1.4)
-}
-
-function stoneArchTrim() {
-  const sh = new THREE.Shape()
-  const a=-Math.PI/26+.009,b=Math.PI/26-.009
-  sh.absarc(0,0,6.12,a,b,false); sh.absarc(0,0,5.62,b,a,true); sh.closePath()
-  return new THREE.ExtrudeGeometry(sh,{bevelEnabled:false,depth:.19,curveSegments:2})
-}
-
-function batches(scene) {
-  const geo = {
-    box:new THREE.BoxGeometry(),
-    trunk:new THREE.CylinderGeometry(.65,1,1,8),
-    pipe:new THREE.CylinderGeometry(1,1,1,6),
-    crown:new THREE.IcosahedronGeometry(1,1),
-    shrub:new THREE.IcosahedronGeometry(1,0),
-    spruce:new THREE.ConeGeometry(1,1,8),
-    roof:prism(),
-    arch:masonry(14,5.66),
-    archTrim:stoneArchTrim(),
-  }
-  const material = new THREE.MeshLambertMaterial({flatShading:true})
-  const groups = new Map()
-  const sections = []
-  const rotation = new THREE.Euler(), quaternion = new THREE.Quaternion(), matrix = new THREE.Matrix4()
-  const up = new THREE.Vector3(0,1,0)
-  function place(type,x,y,z,w,h,d,tint,rx=0,ry=0,rz=0) {
-    quaternion.setFromEuler(rotation.set(rx,ry,rz,'YXZ'))
-    put(type,x,y,z,w,h,d,tint,quaternion)
-  }
-  function put(type,x,y,z,w,h,d,tint,q) {
-    // Group by distance to keep distant villages and woodland out of the draw list.
-    const section=Math.floor(-z/80)
-    const key = type + ':' + section
-    if (!groups.has(key)) groups.set(key,{type,section,list:[]})
-    matrix.compose(new THREE.Vector3(x,y,z),q,new THREE.Vector3(w,h,d))
-    groups.get(key).list.push([matrix.clone(), new THREE.Color(tint)])
-  }
-  function beam(type,a,b,radius,tint,depth=radius) {
-    const v = new THREE.Vector3(b[0]-a[0],b[1]-a[1],b[2]-a[2])
-    const len = v.length()
-    put(type,(a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2,radius,len,depth,tint,quaternion.setFromUnitVectors(up,v.normalize()))
-  }
-  function finish() {
-    for (const {type,section,list} of groups.values()) {
-      const mesh = new THREE.InstancedMesh(geo[type],material,list.length)
-      list.forEach(([m,c],i) => {mesh.setMatrixAt(i,m); mesh.setColorAt(i,c)})
-      mesh.computeBoundingSphere(); scene.add(mesh)
-      const reach=type==='shrub'?100:300
-      sections.push({mesh,from:section*80-reach,to:(section+1)*80+24})
-    }
-  }
-  let lastBucket
-  function update(s) {
-    const bucket=Math.floor(s/8)
-    if(bucket===lastBucket) return
-    lastBucket=bucket
-    for(const part of sections) part.mesh.visible=s>=part.from && s<=part.to
-  }
-  return {place,beam,finish,update}
-}
-
-// The shadow atlas follows the entire course. Sampling it on the ground avoids shadow-map
-// shimmers on the road as the chase camera moves and keeps trees cheap on mobile GPUs.
 function groundShadows() {
-  const width=512, height=2048, spanX=400, spanS=LAST-FIRST+24
+  const w=768,h=2048,spanX=380,spanS=LAST-FIRST+24
   const canvas=document.createElement('canvas')
-  canvas.width=width;canvas.height=height
+  canvas.width=w; canvas.height=h
   const ctx=canvas.getContext('2d')
-  ctx.fillStyle='white';ctx.fillRect(0,0,width,height)
-  ctx.scale(width/spanX,height/spanS)
-  ctx.translate(spanX/2,12-FIRST)
-  const tex=new THREE.CanvasTexture(canvas)
-  const rand=makeRandom(219)
-  function ellipse(x,s,rx,rz,strength) {
-    ctx.save()
-    ctx.translate(x,s);ctx.scale(rx,rz)
-    const g=ctx.createRadialGradient(0,0,.03,0,0,1)
-    g.addColorStop(0,'rgba(0,0,0,'+strength+')')
-    g.addColorStop(.67,'rgba(0,0,0,'+strength*.94+')')
-    g.addColorStop(.87,'rgba(0,0,0,'+strength*.75+')')
+  ctx.fillStyle='white';ctx.fillRect(0,0,w,h)
+  ctx.scale(w/spanX,h/spanS);ctx.translate(spanX/2,12-FIRST)
+  const map=new THREE.CanvasTexture(canvas)
+  function ellipse(x,s,rx,rz,opacity,rotation=0) {
+    ctx.save();ctx.translate(x,s);ctx.rotate(rotation);ctx.scale(rx,rz)
+    const g=ctx.createRadialGradient(0,0,.01,0,0,1)
+    g.addColorStop(0,'rgba(0,0,0,'+opacity+')')
+    g.addColorStop(.76,'rgba(0,0,0,'+opacity*.93+')')
     g.addColorStop(1,'rgba(0,0,0,0)')
-    ctx.fillStyle=g
-    ctx.fillRect(-1,-1,2,2)
-    // Canopy lobes break up the shadow edge in the large tree galleries.
-    if(rx>7) for(let i=0;i<12;i++) {
-      const a=i/12*TAU, r=.13+rand()*.14, dx=Math.cos(a)*.85,dy=Math.sin(a)*.83
-      const patch=ctx.createRadialGradient(dx,dy,r*.42,dx,dy,r)
-      patch.addColorStop(0,'rgba(0,0,0,'+strength*.48+')')
-      patch.addColorStop(1,'rgba(0,0,0,0)')
-      ctx.fillStyle=patch;ctx.fillRect(dx-r,dy-r,r*2,r*2)
-    }
-    ctx.restore()
+    ctx.fillStyle=g;ctx.fillRect(-1,-1,2,2);ctx.restore()
   }
   function apply(material) {
     material.onBeforeCompile=shader=>{
-      shader.uniforms.courseShade={value:tex}
+      shader.uniforms.shadeAtlas={value:map}
       shader.vertexShader=shader.vertexShader.replace('#include <common>',
         '#include <common>\nvarying vec2 vShadeUV;').replace('#include <begin_vertex>',
         `#include <begin_vertex>
         vShadeUV=vec2(position.x/${spanX.toFixed(1)}+.5,1.-(-position.z+${(12-FIRST).toFixed(1)})/${spanS.toFixed(1)});`)
       shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
-        '#include <common>\nvarying vec2 vShadeUV; uniform sampler2D courseShade;')
+        '#include <common>\nvarying vec2 vShadeUV; uniform sampler2D shadeAtlas;')
         .replace('#include <color_fragment>',`#include <color_fragment>
-        float shade=1.-texture2D(courseShade,vShadeUV).r;
-        diffuseColor.rgb *= 1.-vec3(.88,.76,.54)*shade;`)
+        ${material.userData.paint ? 'if(vColor.r>.90) diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.92,.90,.82),.83);' : ''}
+        ${material.userData.fields ? `
+        vec2 world=vec2((vShadeUV.x-.5)*${spanX.toFixed(1)},(1.-vShadeUV.y)*${spanS.toFixed(1)}-${(12-FIRST).toFixed(1)});
+        vec2 field=mat2(.97,.24,-.24,.97)*world/vec2(34.,42.);
+        field.x+=mod(floor(field.y),2.)*.28;
+        vec2 cell=floor(field);vec2 f=fract(field);
+        float hash=fract(sin(dot(cell,vec2(12.213,48.7)))*467.432);
+        float rows=sin(field.x*97.+field.y*3.1);
+        float centre=12.*sin(world.y/67.+.3)+15.*sin(world.y/109.-.58)+4.7*sin(world.y/31.-.6);
+        float remote=smoothstep(25.,48.,abs(world.x-centre));
+        vec3 oats=mix(vec3(.78,.92,.42), vec3(1.88,1.43,.58),hash);
+        float hedge=(1.-smoothstep(.006,.034,min(min(f.x,1.-f.x),min(f.y,1.-f.y))));
+        vec3 farmland=mix(oats*(.94+.064*rows),vec3(.47,.59,.32),hedge);
+        diffuseColor.rgb*=mix(vec3(1.23,1.29,.80),farmland,remote);
+        ` : ''}
+        float shade=1.-texture2D(shadeAtlas,vShadeUV).r;
+        diffuseColor.rgb *= 1.-vec3(.89,.84,.50)*shade;`)
     }
+    material.customProgramCacheKey=()=>material.userData.paint?'paint':'meadow'
   }
   return {ellipse,apply}
 }
 
-// Sweep irregular cross sections along each limb so bent boughs stay continuous at their joints.
-function woodwork(scene) {
-  const points=[],tones=[],indices=[],rand=makeRandom(422)
-  const axis=new THREE.Vector3(0,0,1)
-  const bark=new THREE.Color('#826d4e')
-  function limb(centres,radii) {
-    const n=9, start=points.length/3
-    const grain=Array.from({length:n},()=>.79+rand()*.4)
-    centres.forEach((point,j)=>{
-      const prev=centres[Math.max(0,j-1)],next=centres[Math.min(centres.length-1,j+1)]
-      const tangent=new THREE.Vector3(next[0]-prev[0],next[1]-prev[1],next[2]-prev[2]).normalize()
-      const side=new THREE.Vector3().crossVectors(tangent,axis).normalize()
-      const normal=new THREE.Vector3().crossVectors(tangent,side).normalize()
-      for(let i=0;i<n;i++){
-        const a=i/n*TAU,r=radii[j]*(.82+grain[i]*.18),u=Math.cos(a)*r,v=Math.sin(a)*r
-        points.push(point[0]+side.x*u+normal.x*v,point[1]+side.y*u+normal.y*v,point[2]+side.z*u+normal.z*v)
-        tones.push(bark.r*grain[i],bark.g*grain[i],bark.b*grain[i])
-        if(j){
-          const k=start+j*n+i,kn=start+j*n+(i+1)%n
-          indices.push(k-n,kn-n,k,kn-n,kn,k)
+function makeWood(scene) {
+  const material=new THREE.MeshLambertMaterial({map:terrainMap('bark'),vertexColors:true,side:THREE.DoubleSide})
+  const grain=random(87223), slices=new Map()
+  function limb(path, radii, moss=.0, rootSide=0) {
+    const part=Math.floor(-path[0][2]/120)
+    const coarse=path
+    const curved=new THREE.CatmullRomCurve3(coarse.map(p=>new THREE.Vector3(...p)))
+    const radii0=radii
+    path=curved.getPoints((coarse.length-1)*3).map(p=>p.toArray())
+    radii=path.map((_,j)=>{
+      const a=j/3,i=Math.min(radii0.length-2,Math.floor(a))
+      return THREE.MathUtils.lerp(radii0[i],radii0[i+1],a-i)
+    })
+    if(!slices.has(part)) slices.set(part,{p:[],uv:[],c:[],i:[]})
+    const data=slices.get(part), first=data.p.length/3
+    const n=radii[0]>2?20:9, stride=n+1
+    const ring=Array.from({length:n},(_,i)=>.89+grain()*.18+sin(i*Math.PI*.8)*.07)
+    const radialBrightness=Array.from({length:n},()=>.84+grain()*.26)
+    const aspect=Math.max(1, radii[0]*2.9)
+    const wood=new THREE.Color('#e1dbc2'), lichen=new THREE.Color('#a7c45c')
+    let length=0
+    path.forEach((p,j)=>{
+      const prev=path[Math.max(j-1,0)],next=path[Math.min(j+1,path.length-1)]
+      if(j)length+=Math.hypot(p[0]-prev[0],p[1]-prev[1],p[2]-prev[2])
+      const along=new THREE.Vector3(next[0]-prev[0],next[1]-prev[1],next[2]-prev[2]).normalize()
+      const ax=new THREE.Vector3().crossVectors(along,new THREE.Vector3(0,0,1)).normalize()
+      const az=new THREE.Vector3().crossVectors(ax,along).normalize()
+      for(let k=0;k<=n;k++){
+        const a=k/n*TAU+sin(j*.8)*.055, rk=ring[k%n]*radii[j]
+        const u=cos(a)*rk, v=sin(a)*rk
+        let x=p[0]+ax.x*u+az.x*v
+        const y=p[1]+ax.y*u+az.y*v,z=p[2]+ax.z*u+az.z*v
+        if(rootSide){
+          const centre=roadAt(-z).x
+          x=centre+rootSide*Math.max(5.5,(x-centre)*rootSide)
+        }
+        data.p.push(x,y,z)
+        const stain=(.6+.27*sin(a*3+j*.82)+.13*cos(a*6-j))*moss
+        const tone=wood.clone().lerp(lichen,stain).multiplyScalar(radialBrightness[k%n])
+        data.c.push(tone.r,tone.g,tone.b)
+        data.uv.push(k/n*aspect,length/2.1)
+        if(j && k){
+          const i=first+j*stride+k
+          data.i.push(i-stride-1,i-1,i-stride,i-stride,i-1,i)
         }
       }
     })
   }
   function finish(){
-    const g=new THREE.BufferGeometry()
-    g.setAttribute('position',new THREE.Float32BufferAttribute(points,3))
-    g.setAttribute('color',new THREE.Float32BufferAttribute(tones,3))
-    g.setIndex(indices); g.computeVertexNormals()
-    scene.add(new THREE.Mesh(g,new THREE.MeshLambertMaterial({vertexColors:true,side:THREE.DoubleSide})))
+    const sections=[]
+    for(const [section,d] of slices) {
+      const mesh=new THREE.Mesh(geometry(d.p,d.i,d.c,d.uv),material)
+      mesh.castShadow=true;mesh.receiveShadow=true
+      sections.push({mesh,from:section*120-342,to:(section+1)*120+54})
+      scene.add(mesh)
+    }
+    let previous=-1
+    return distance=>{
+      const bucket=Math.floor(distance/8)
+      if(bucket===previous)return
+      previous=bucket
+      for(const part of sections)part.mesh.visible=distance>=part.from && distance<=part.to
+    }
   }
   return {limb,finish}
 }
 
-function landscapeObjects(batch,shade,wood) {
-  const {place,beam} = batch, rand = makeRandom(9301)
-  const pick = list => list[Math.floor(rand()*list.length)]
-  const canopies = ['#44703c','#58813f','#688f40','#779441','#47723e','#668845','#83a14c']
-  function canopy(x,y,z,r) {
-    place('crown',x,y,z,r*(1.05+rand()*.3),r*.75,r,pick(canopies),rand()*.3,rand()*6,rand()*.4)
+function makeOakAvenue(scene, leaves, shade) {
+  const rng=random(64112),wood=makeWood(scene)
+  function crown(p,rx,ry,rz) {
+    leaves.crown(p[0],p[1],p[2],rx,ry,rz,Math.floor(rng()*1e6))
   }
-  function greatTree(side,s,height) {
-    const x = roadAt(s).x + side*(8.5+rand()*1.5), z=-s
-    const y = groundAt(x,s)
-    shade.ellipse(x+height*.44,s-height*.27,height*.43,height*.29,.52)
-    shade.ellipse(x,s,height*.15,height*.15,.42)
-    const root=[x,y-.65,z], elbow=[x+side*1.25,y+height*.38,z-1], fork=[x-side*1.35,y+height*.69,z-.5]
-    wood.limb([root,[x+side*.47,y+height*.16,z-.3],elbow,[x+side*.42,y+height*.52,z-.78],fork],
-      [.125,.08,.069,.055,.038].map(r=>r*height))
-    for(let k=0;k<7;k++) {
-      const a=k*TAU/7
-      wood.limb([[x+Math.sin(a)*height*.17,y-.44,z+Math.cos(a)*height*.17],
-        [x+Math.sin(a)*height*.101,y+.38,z+Math.cos(a)*height*.101],
-        [x+side*.4,y+height*.17,z-.3]],[height*.013,height*.038,height*.052])
+  function oak(side,s,reach,canopyHeight) {
+    const road=roadAt(s)
+    const x=road.x+side*reach,z=-s,base=groundAt(x,s)
+    const h=road.y-base+canopyHeight
+    const twist=(rng()-.5)*9
+    const girth=3.3+h*.070
+    const root=[x,base-.9,z], waist=[x+side*1.8,base+h*.30,z+twist]
+    const mid=[x-side*1.1,base+h*.55,z+twist*.65]
+    const fork=[x-side*5.4,base+h*.71,z-1.8]
+    wood.limb([root,[x+side*1.4,base+h*.09,z+.4],waist,mid,fork],
+      [girth*1.46,girth*1.06,girth*.76,girth*.65,girth*.51],.65)
+    // Buttresses follow the valley floor, with a carved central fluting down the bole.
+    for(let i=0;i<12;i++) {
+      const a=TAU*i/12+rng()*.15, r=girth*(2.2+rng()*1.2)
+      const dx=sin(a), ds=cos(a), endS=s+ds*r,bendS=s+ds*r*.63
+      const keepOffShoulder=(xx,ss)=>roadAt(ss).x+side*Math.max(7.0,(xx-roadAt(ss).x)*side)
+      const endX=keepOffShoulder(x+dx*r,endS),bendX=keepOffShoulder(x+dx*r*.63,bendS)
+      const start=[x+dx*girth*.61,base+(girth*(2+rng()*1.7)),z-ds*girth*.61]
+      const bend=[bendX,groundAt(bendX,bendS)+girth*.37,-bendS]
+      wood.limb([start,[x+dx*girth*.86,base+girth*.70,z-ds*girth*.86],bend,[endX,groundAt(endX,endS)-.23,-endS]],
+        [girth*.32,girth*.48,girth*.27,.19],.95,side)
     }
-    for(let k=0;k<7;k++) {
-      const a=TAU*k/7+rand()*.4
-      const end=[fork[0]+Math.sin(a)*height*.29,fork[1]+(.19+rand()*.11)*height,fork[2]+Math.cos(a)*height*.25]
-      const bend=[(fork[0]+end[0])*.5,(fork[1]+end[1])*.5-.65,(fork[2]+end[2])*.5]
-      wood.limb([fork,bend,end],[height*.034,height*.025,height*.011])
-      canopy(...end,height*(.18+rand()*.044))
-      canopy(end[0]+Math.sin(a)*2,end[1]-1,end[2]+Math.cos(a)*2,height*.133)
+    // The two road-facing boughs form a vault above the rider, with irregular splits and tips.
+    const crossing=[road.x+side*11,road.y+canopyHeight*.50,z+twist-1]
+    const span=[road.x+side*2,road.y+canopyHeight*.60,z-5]
+    const far=[road.x-side*7.6,road.y+canopyHeight*.70,z-8.2]
+    wood.limb([mid,[x-side*reach*.32,road.y+canopyHeight*.35,z+twist*.5],crossing,span,far],
+      [girth*.62,girth*.51,girth*.33,girth*.19,.55],.45)
+    crown(far,9.8,5.1,8)
+    for(let j=1;j<=3;j++){
+      const t=j/4
+      crown([span[0]*(1-t)+far[0]*t,span[1]*(1-t)+far[1]*t+1.9,span[2]*(1-t)+far[2]*t],6.4,3.6,5.9)
     }
-    const inward=[x-side*height*.35, y+height*.66,z+1]
-    const tip=[x-side*height*.5,y+height*.72,z+2.2]
-    wood.limb([elbow,[x-side*height*.16,y+height*.53,z+.6],inward,tip],[.056,.044,.032,.019].map(r=>r*height))
-    canopy(...tip,height*.173)
-  }
-  for(const s of [13,39,75,112,245,268,880,905,939,977,1103,1138]) {
-    greatTree(-1,s,16+rand()*5); greatTree(1,s+5+rand()*3,15+rand()*6)
-  }
-  function tree(x,s,h,pine) {
-    const y = groundAt(x,s), z=-s
-    if(Math.abs(x-roadAt(s).x)<33) shade.ellipse(x+h*.36,s-h*.25,h*.34,h*.24,.38)
-    place('trunk',x,y+h*.28,z,h*.048,h*.58,h*.047,'#6d6551')
-    if (pine) {
-      const t=pick(['#426d5a','#385d50','#567a5b','#466d52'])
-      for(let i=0;i<3;i++) place('spruce',x,y+h*(.43+i*.16),z,h*(.23-i*.041),h*(.55-i*.066),h*(.23-i*.04),t,0,i*.37)
-    } else {
-      canopy(x,y+h*.74,z,h*.31)
-      canopy(x+h*.14,y+h*.70,z+h*.09,h*.22)
-      canopy(x-h*.15,y+h*.65,z-h*.1,h*.235)
-    }
-  }
-  for(let i=0;i<1250;i++) {
-    const s = FIRST+rand()*(LAST-FIRST)
-    const side = rand()<.5?-1:1
-    const lateral=10+Math.pow(rand(),.75)*140
-    if (s>385 && s<740 && lateral<29 || s>140 && s<170 && lateral<19) continue
-    tree(roadAt(s).x+side*lateral,s,3+rand()*7.5,lateral>32?rand()<.65:rand()<.18)
-  }
-  // Small rocks, grasses and flowering verges supply a readable near-ground speed cue.
-  for(let i=0;i<3400;i++) {
-    const s=FIRST+rand()*(LAST-FIRST), side=rand()<.5?-1:1
-    const x=roadAt(s).x+side*(5.35+rand()*20),y=groundAt(x,s),z=-s
-    if (i%8===0) place('shrub',x,y+.15,z,.4+rand()*1.1,.25+rand()*.5,.5+rand()*.6,pick(['#9b9c86','#888e83','#a2a291']),rand()*.4,rand()*4)
-    else if (i%4===0) place('shrub',x,y+.32,z,.55+rand(),.45+rand()*.5,.9,pick(canopies),0,rand()*3)
-    else place('shrub',x,y+.16,z,.10+rand()*.22,.16+rand()*.35,.12+rand()*.19,pick(['#bbbe64','#7f9d48','#cdbe72','#c4b270','#d8c993']),0,rand()*3)
-  }
-  for(let i=0;i<560;i++) {
-    const s=FIRST+rand()*(LAST-FIRST), side=rand()<.5?-1:1
-    const x=roadAt(s).x+side*(5.3+rand()*4.7)
-    const bloom=pick(['#f3cc64','#f4db89','#e8dfaa','#d4a8a2'])
-    for(let j=0;j<5;j++) {
-      const dx=x+(rand()-.5)*1.2, ds=s+(rand()-.5)*1.2, y=groundAt(dx,ds)
-      place('shrub',dx,y+.19,-ds,.12,.26+rand()*.21,.08,'#819d4c',0,rand()*3,(rand()-.5)*.4)
-      if(j%2===0) place('shrub',dx,y+.42,-ds,.10,.09,.11,bloom,0,rand()*3)
-    }
-  }
-  // Galvanised guardrails and Swiss-style roadside delineators.
-  for (let s=FIRST+4;s<LAST-6;s+=4) {
-    for (const side of [-1,1]) {
-      const road=roadAt(s), next=roadAt(s+4), x=road.x+side*4.88, end=next.x+side*4.88
-      const guard=side===-1 && (s%165)<78 && !(s>380&&s<730)
-      if(guard) {
-        place('box',x,road.y+.44,-s,.11,.94,.12,'#808484')
-        beam('box',[x,road.y+.76,-s],[end,next.y+.76,-s-4],.105,'#c4c9b5',.23)
-      } else if(s%16===4) {
-        place('box',x+side*.26,road.y+.47,-s,.16,.95,.18,'#eae6cf')
-        place('box',x+side*.26,road.y+.72,-s,.164,.18,.185,'#353d3b')
-        place('box',x+side*.26,road.y+.74,-s+.102,.084,.079,.025,side<0?'#d96a40':'#f4e7b2')
+    for(let k=0;k<6;k++) {
+      const a=k*TAU/6+rng()*.5
+      const d=13+rng()*7
+      const elbow=[fork[0]+sin(a)*d*.49,base+h*(.81+rng()*.036),fork[2]+cos(a)*d*.50]
+      const end=[fork[0]+sin(a+.10)*d,base+h*(.92+rng()*.07),fork[2]+cos(a+.10)*d]
+      const t0=.40+(k%3)*.24
+      const split=mid.map((v,i)=>THREE.MathUtils.lerp(v,fork[i],t0))
+      wood.limb([split,[elbow[0]+cos(a)*2.1,elbow[1]-1.6,elbow[2]-sin(a)*2.1],elbow,end],[girth*.32,girth*.235,girth*.18,.36],.32)
+      const c=end.map((v,i)=>THREE.MathUtils.lerp(v,elbow[i],.34))
+      crown(c,8.2+rng()*2.5,4.1+rng()*1.9,7.5+rng()*2.5)
+      crown([elbow[0]+sin(a)*2,elbow[1]+1.6,elbow[2]+cos(a)*2],6.6,3.8,5.8)
+      for(let twig=0;twig<3;twig++){
+        const t=a+(twig-1)*.77
+        const tip=[end[0]+sin(t)*(4+rng()*6),end[1]+3+rng()*5,end[2]+cos(t)*(4+rng()*6)]
+        wood.limb([end,[(end[0]+tip[0])*.5,(end[1]+tip[1])*.5-1,(end[2]+tip[2])*.5],tip],
+          [1.05,.66,.15],.15)
+        crown(tip,7.4+rng()*4.4,4.4+rng()*2.8,7.4+rng()*3.6)
       }
     }
-  }
-  function house(x,s,w,h,d,angle,tone) {
-    const y=groundAt(x,s),z=-s, ca=Math.cos(angle),sa=Math.sin(angle)
-    function part(type,ox,oy,oz,width,height,depth,color) {
-      place(type,x+ox*ca+oz*sa,y+oy,z-ox*sa+oz*ca,width,height,depth,color,0,angle)
+    for(let j=0;j<4;j++){
+      const k=j/3, tip=[THREE.MathUtils.lerp(crossing[0],far[0],k),crossing[1]+4+k*6,crossing[2]-5+k*3]
+      crown(tip,6.5+rng()*3.5,3.7+rng()*2.6,5+rng()*4)
     }
-    const roof=pick(['#965c48','#8f5c46','#665c55','#ae7350','#626772','#9a6e55'])
-    const timber=pick(['#675345','#755d49','#564c43'])
-    const near = Math.abs(x-roadAt(s).x)<24
-    if(near) shade.ellipse(x+2.4,s-2,w*.92,d*.79,.42)
-    part('box',0,h/2-.65,0,w,h+1.3,d,tone)
-    part('roof',0,h,0,w+1.1,w*.48,d+.95,roof)
-    if(near) {
-      // Plastered gable ends sit just under the overhanging tiled roof.
-      part('roof',0,h,0,w*.85,w*.415,d+.96,'#e4cda6')
-      part('box',0,h+w*.48,0,.14,.13,d+1.02,'#82533e')
+    // Small leafy colonies along the bark interrupt the otherwise smooth giant silhouette.
+    for(let j=0;j<8;j++){
+      const t=j/8, a=j*2.412, r=girth*(.69-.19*t)
+      const pos=[THREE.MathUtils.lerp(waist[0],fork[0],t)+sin(a)*r,
+        THREE.MathUtils.lerp(waist[1],fork[1],t),THREE.MathUtils.lerp(waist[2],fork[2],t)+cos(a)*r]
+      crown(pos,1.7+rng()*1.7,2.3+rng()*2.8,1.6+rng()*1.3)
     }
-    part('box',w*.23,h+w*.30,-d*.17,w*.10,w*.43,w*.125,'#b8a48d')
-    for (const side of [-1,1]) {
-      const face=d/2*side
-      for(let i=-1;i<=1;i++) {
-        part('box',w*.31*i,h*.65,face,w*.12,h*.17,.1,'#4a6262')
-        for(const sign of [-1,1]) part('box',w*.31*i+sign*w*.088,h*.65,face,w*.046,h*.19,.14,timber)
-      }
-      part('box',0,h*.29,face,w*.16,h*.55,.14,timber)
-      part('box',0,h*.49,face,w+.06,.12,.15,timber)
-      part('box',0,h-.08,face,w+.06,.13,.15,timber)
-      if(near) {
-        part('box',0,h*.87,face,.13,h*.25,.17,timber)
-        for(const t of [-.46,-.19,.19,.46]) part('box',w*t,h*.53,face,.13,h*.94,.18,timber)
-        for(const t of [-.24,.24]) {
-          const ax=x+(w*t)*ca+(face+.08*side)*sa, az=z-(w*t)*sa+(face+.08*side)*ca
-          place('box',ax,y+h*.77,az,.12,h*.42,.16,timber,0,angle,t>0?.5:-.5)
-        }
-        part('box',0,h*.11,face+.32*side,w*.20,.19,.73,'#a59c86')
-        part('box',0,h+w*.17,side*(d+.99)/2,w*.1,w*.15,.11,'#4e5c59')
-        part('box',0,h+w*.165,side*(d+.98)/2,.10,w*.35,.09,timber)
-      }
-    }
-    for(const side of [-1,1]) {
-      part('box',side*w*.49,h*.52,0,.13,.15,d+.1,timber)
-      for(const t of [-.28,.28]) {
-        part('box',side*w*.5,h*.69,t*d,.09,h*.2,d*.14,'#536e6a')
-        if(near) {
-          part('box',side*w*.5,h*.27,t*d,.10,h*.22,d*.13,'#506464')
-          part('box',side*(w*.5+.05),h*.575,t*d,.16,.10,d*.19,'#e4c598')
-          for(const sign of [-1,1]) part('box',side*w*.5,h*.69,(t+sign*.10)*d,.12,h*.22,d*.05,timber)
-        }
-      }
-      if(near) for(const t of [-.475,0,.475]) part('box',side*w*.5,h*.5,t*d,.14,h,.16,timber)
+    shade.ellipse(x-girth*.5,s-girth*.3,girth*2.7,girth*2.1,.83)
+    // Sun comes from the front right. The broad crowns break up into pools of shade and light.
+    const castX=side>0?road.x-3:road.x-reach*.9
+    for(let i=0;i<14;i++) {
+      shade.ellipse(castX+(rng()-.5)*19,s-6+(rng()-.5)*22,3+rng()*6,3+rng()*5,.48+rng()*.29,-.46)
     }
   }
-  const plaster=['#ead4aa','#d9c59e','#f0dcb2','#d0b99d','#efdfc2','#d6b58b']
-  for(let s=367;s<736;s+=10+rand()*8) {
-    for (const side of [-1,1]) {
-      const away=10+rand()*3.2
-      house(roadAt(s).x+side*away,s+rand()*2,5+rand()*2.2,4.3+rand()*4,6+rand()*2.5,side*(1+rand()*.4),pick(plaster))
-    }
+  for(const s of [26,96,174,244,322,754,835,911,992]){
+    oak(-1,s-4,22+rng()*9,21+rng()*7)
+    oak(1,s+8+rng()*7,21+rng()*11,20+rng()*9)
   }
-  for(let i=0;i<115;i++) {
-    const s=35+rand()*1110,side=rand()<.75?-1:1
-    const x=roadAt(s).x+side*(31+rand()*100)
-    house(x,s,5+rand()*3,4+rand()*3,6+rand()*3,rand()*Math.PI,pick(plaster))
-  }
-  for (const [s,lateral] of [[115,-46],[440,24],[686,-24],[936,54]]) {
-    const x=roadAt(s).x+lateral, base=groundAt(x,s)
-    house(x,s,8,7,14,.3,'#ecd9ad')
-    place('box',x+2,base+7.3,-s-5,3.1,16.6,3.1,'#e8d5b0',0,.3)
-    place('spruce',x+2,base+19,-s-5,3,7,3,'#52655e',0,.55)
-  }
-  function viaduct(s, yaw, elevation, count) {
-    const road=roadAt(s), deck=road.y+elevation, ca=Math.cos(yaw),sa=Math.sin(yaw)
-    for(let i=-count; i<=count; i++) {
-      const centre=i*14
-      function at(a,b,c){return [road.x+(centre+a)*ca+c*sa,deck+b,-s-(centre+a)*sa+c*ca]}
-      place('arch',...at(0,0,0),1,1,1,pick(['#b8a78a','#c0ae90','#baaa8d']),0,yaw)
-      place('box',...at(0,-.18,0),14,.42,3.25,'#d5c4a0',0,yaw)
-      place('box',...at(0,.15,0),14,.25,3.0,'#a2967c',0,yaw)
-      place('box',...at(0,.48,.99),14,.58,.36,'#c3b18e',0,yaw)
-      place('box',...at(0,.48,-.99),14,.58,.36,'#c3b18e',0,yaw)
-      for(let k=0;k<13;k++){
-        const a=(k+.5)*Math.PI/13
-        place('archTrim',...at(0,-9,1.405),1,1,1,k%3===0?'#dcccac':'#cebd9e',0,yaw,a)
-      }
-      for(const sy of [-10,-15,-20,-25,-30]) {
-        place('box',...at(6.98,sy,0),2.95,.38,3.06,'#ae9d81',0,yaw)
-      }
-    }
-  }
-  viaduct(152,.36,15,13)
-  viaduct(778,-.48,16,13)
+  return wood.finish()
 }
 
-function makeHorizon(scene) {
-  const sky = new THREE.Group()
-  sky.renderOrder = -5
-  scene.add(sky)
-  const dome = new THREE.ShaderMaterial({
-    side:THREE.BackSide,depthWrite:false,depthTest:false,fog:false,
-    uniforms: {
-      zenith:{value:new THREE.Color('#5097c2')},haze:{value:new THREE.Color('#d6e7db')},
-      sunlight:{value:new THREE.Color('#fff2c0')},
-    },
-    vertexShader:`varying vec3 ray;
-    void main() {ray=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-    fragmentShader:`
-      varying vec3 ray;
-      uniform vec3 zenith; uniform vec3 haze; uniform vec3 sunlight;
-      float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
-      float noise(vec2 p){
-        vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f);
-        return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);
-      }
-      void main(){
-        vec3 v=normalize(ray);
-        vec3 col=mix(haze,zenith,smoothstep(-.035,.66,v.y));
-        float sun=max(dot(v,normalize(vec3(-.52,.32,-.85))),0.);
-        col=mix(col,sunlight,clamp(pow(sun,30.)*.30+pow(sun,350.)*.51+smoothstep(.9992,.9998,sun),0.,1.));
-        vec2 p=v.xz/max(.06,v.y)*1.7;
-        float cloud=noise(p)*.52+noise(p*2.03)*.27+noise(p*4.1)*.14+noise(p*8.3)*.07;
-        col=mix(col,vec3(.94,.96,.90),smoothstep(.60,.78,cloud)*smoothstep(.02,.15,v.y)*.70);
-        gl_FragColor=vec4(col,1.);
-        #include <colorspace_fragment>
-      }`,
-  })
-  const domeMesh=new THREE.Mesh(new THREE.SphereGeometry(240,32,18),dome)
-  domeMesh.renderOrder=-5; domeMesh.frustumCulled=false; sky.add(domeMesh)
-  const rand=makeRandom(15)
-  // A triangulated Alpine skyline. Pale rock faces and snow follow the same sun direction as the track.
-  const mountainLayers=[]
-  for(let layer=0;layer<2;layer++) {
-    const points=[],colors=[]
-    const radius=208-layer*25, n=116
-    const rings=[[],[],[],[]]
-    for(let i=0;i<n;i++) {
-      const a=i/n*TAU, wave=(Math.sin(a*6+.8)+1)/2, peak=(Math.sin(a*11+1.7)+1)/2
-      const height=layer===0 ? 25+wave*17+peak*9+rand()*7 : 7+wave*10+peak*4+rand()*3
-      for(let k=0;k<4;k++) {
-        const r=radius-k*(4+layer*2)-rand()*1.8
-        const offset=k===0 ? 0 : Math.sin(i*1.7+k)*.019
-        rings[k].push([Math.sin(a+offset)*r,[height,height*.70,height*.26,-29][k],-Math.cos(a+offset)*r])
-      }
-    }
-    const lightRock=['#91a7b2','#adbdc3','#90a9b5','#849ba8']
-    const nearHill=['#88a69b','#87a295','#8fac9e','#76968b']
-    for(let i=0;i<n;i++) {
-      const j=(i+1)%n
-      for(let k=0;k<3;k++) {
-        for(const tri of [[rings[k][i],rings[k+1][i],rings[k][j]],[rings[k][j],rings[k+1][i],rings[k+1][j]]]) {
-          const high=Math.max(...tri.map(p=>p[1]))
-          const snowy=layer===0 && k===0 && high>38 && (tri[0][1]>tri[2][1] || rand()>.45)
-          const tint=new THREE.Color(snowy?(rand()<.5?'#f0f0df':'#e2e8df'):(layer?nearHill:lightRock)[Math.floor(rand()*4)])
-          for(const p of tri){points.push(...p);colors.push(tint.r,tint.g,tint.b)}
-        }
-      }
-    }
-    const mat=new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide,depthTest:false,depthWrite:false,fog:false})
-    const mountains=triangleMesh(points,colors,mat)
-    mountains.frustumCulled=false; mountains.renderOrder=-4+layer
-    sky.add(mountains); mountainLayers.push(mat)
+function lawnBlades() {
+  const rng=random(752),p=[],c=[],i=[]
+  for(let j=0;j<10;j++){
+    const a=rng()*TAU,x=sin(a)*rng()*.37,z=cos(a)*rng()*.37
+    const h=.20+rng()*.59,w=.024+rng()*.047,lean=.12+rng()*.18
+    const dx=cos(a)*w,dz=sin(a)*w, ox=sin(a)*lean,oz=cos(a)*lean,f=p.length/3
+    p.push(x-dx,0,z-dz,x+dx,0,z+dz,x+ox*.43+dx*.56,h*.63,z+oz*.43+dz*.56,
+      x+ox*.43-dx*.56,h*.63,z+oz*.43-dz*.56,x+ox,h,z+oz)
+    for(let k=0;k<5;k++) c.push(...(k<2?[.15,.23,.052]:k<4?[.45,.68,.20]:[.82,.91,.36]))
+    i.push(f,f+1,f+3,f+1,f+2,f+3,f+2,f+4,f+3)
   }
+  return geometry(p,i,c)
+}
+
+function archSpan() {
+  const sh=new THREE.Shape()
+  sh.moveTo(-9,0);sh.lineTo(9,0);sh.lineTo(9,-65);sh.lineTo(7.6,-65);sh.lineTo(7.6,-10.5)
+  sh.absarc(0,-10.5,7.6,0,Math.PI,false);sh.lineTo(-7.6,-65);sh.lineTo(-9,-65);sh.closePath()
+  return new THREE.ExtrudeGeometry(sh,{depth:3.8,bevelEnabled:false,curveSegments:14}).translate(0,0,-1.9)
+}
+
+function makeLandmarks(scene,leaves,shade) {
+  const rng=random(590), rngSeed=()=>Math.floor(rng()*987654)
+  const trunkGeo=new THREE.CylinderGeometry(.6,1,1,7)
+  const blocks={
+    grass:[lawnBlades(),new THREE.MeshLambertMaterial({vertexColors:true,side:THREE.DoubleSide})],
+    tree:[trunkGeo,new THREE.MeshLambertMaterial({map:terrainMap('bark')})],
+    stone:[new THREE.DodecahedronGeometry(1),new THREE.MeshLambertMaterial({map:terrainMap('rock')})],
+    box:[new THREE.BoxGeometry(),new THREE.MeshLambertMaterial()],
+    arch:[archSpan(),new THREE.MeshLambertMaterial({map:terrainMap('rock')})],
+  }
+  const batches=new Map(), matrix=new THREE.Object3D(), groups=[]
+  function add(key,x,y,z,w,h,d,color,angle=0,lean=0) {
+    const area=Math.floor(-z/100),id=key+':'+area
+    if(!batches.has(id))batches.set(id,{key,area,list:[]})
+    matrix.position.set(x,y,z);matrix.rotation.set(0,angle,lean,'YXZ');matrix.scale.set(w,h,d);matrix.updateMatrix()
+    batches.get(id).list.push([matrix.matrix.clone(),new THREE.Color(color)])
+  }
+  function littleTree(x,s,h,slim) {
+    const y=groundAt(x,s),z=-s, r=h*(slim?.24:.39)
+    add('tree',x,y+h*.32,z,h*.047,h*.65,h*.05,'#b8ad8a',rng()*TAU)
+    leaves.crown(x,y+h*.72,z,r,h*.33,r*.97,rngSeed())
+    if(h>6) leaves.crown(x+r*.55,y+h*.63,z+r*.32,r*.72,h*.24,r*.72,rngSeed())
+    shade.ellipse(x-h*.37,s-h*.36,r*1.3,r*1.2,.74,-.72)
+  }
+  // Hedges define rectangular plots and orchards, giving the valley a readable scale.
+  for(let s=-42;s<LAST;s+=28+rng()*19) {
+    for(const side of [-1,1]) {
+      const dx=42+rng()*113
+      const base=roadAt(s).x+side*dx
+      for(let j=0;j<5+rng()*7;j++) {
+        const along=s+j*(2.7+rng()*.6), x=base+rng()*1.6
+        littleTree(x,along,3.2+rng()*3.3,true)
+      }
+    }
+  }
+  for(let k=0;k<430;k++){
+    const s=FIRST+rng()*(LAST-FIRST),side=rng()<.5?-1:1
+    const d=18+rng()*160
+    if(s>354 && s<677 && d<35 || s>1030 && d<35) continue
+    littleTree(roadAt(s).x+side*d,s,3.5+rng()*6.0,false)
+  }
+  // Dense woods occupy alternating valley flanks. Conifers give the ridges a serrated skyline.
+  for(let along=-35;along<LAST+32;along+=52) {
+    for(const side of [-1,1]){
+      const centre=roadAt(along).x+side*(78+rng()*97)
+      for(let j=0;j<75;j++){
+        const a=rng()*TAU, t=Math.sqrt(rng()), x=centre+cos(a)*t*(27+rng()*20), s=along+sin(a)*t*(21+rng()*23)
+        const y=groundAt(x,s), h=4+rng()*9
+        if(j%3) leaves.conifer(x,y-.1,-s,h*.31,h,h*.28,rngSeed())
+        else leaves.crown(x,y+h*.51,-s,h*.5,h*.47,h*.45,rngSeed())
+      }
+      const back=roadAt(along).x+side*(175+rng()*14)
+      for(let j=0;j<52;j++){
+        const s=along+rng()*58, x=back+side*rng()*61,y=groundAt(x,s),h=6.5+rng()*9
+        leaves.conifer(x,y-.65,-s,h*.34,h,h*.32,rngSeed())
+      }
+    }
+  }
+  // A grass fringe replaces rails on the high causeway so the drop stays visible.
+  for(let i=0;i<6400;i++){
+    const s=FIRST+rng()*(LAST-FIRST),side=rng()<.5?-1:1, x=roadAt(s).x+side*(4.32+rng()**1.9*6)
+    if(s>=397 && s<=661 || s>=1050 && s<=1210) continue
+    const h=.30+rng()*.72
+    if(i%2===0) leaves.tuft(x,groundAt(x,s)-.05,-s,.9+rng()*1.65,.33+rng()*.52,rngSeed())
+    add('grass',x,groundAt(x,s)-.04,-s,.65+rng()*.8,h,.66+rng()*.8,'#dee5b7',rng()*TAU)
+    if(i%29===0){
+      const d=.22+rng()*.71
+      add('stone',x,groundAt(x,s)+d*.13,-s,d,d*.44,d*.74,'#c1c4a4',rng()*TAU,rng()*.4)
+    }
+  }
+  for(let s=350;s<1080;s+=18){
+    if(s>700 && s<1000) continue
+    const side=s%36===8?-1:1, x=roadAt(s).x+side*4.8, y=groundAt(x,s)
+    add('box',x,y+.51,-s,.13,1.02,.14,'#eee7ce')
+    add('box',x,y+.76,-s,.137,.18,.145,'#434343')
+  }
+  function aqueduct(originX,s,angle,height,count) {
+    const deck=roadAt(s).y+height,ca=cos(angle),sa=sin(angle)
+    for(let j=0;j<count;j++){
+      const at=(u,v,z)=>[originX+(j*18+u)*ca+z*sa,deck+v,-s-(j*18+u)*sa+z*ca]
+      add('arch',...at(0,0,0),1,1,1,'#d6c49d',angle)
+      for(const [y,w,h,tone] of [[.29,4.26,.54,'#e7d9aa'],[-.55,4.12,.35,'#aa9778'],[.79,3.8,.42,'#b1b393']]){
+        add('box',...at(0,y,0),18,h,w,tone,angle)
+      }
+      for(let k=0;k<17;k++){
+        const a=(k+.5)*Math.PI/17
+        add('box',...at(cos(a)*7.96,-10.5+sin(a)*7.96,1.97),.67,1.43,.22,
+          k%3===0?'#d9cbaa':'#e8d9b8',angle,a)
+      }
+      for(const y of [-12,-20,-28,-36,-44])add('box',...at(9,y,0),3.0,.30,4.15,'#d5c09c',angle)
+    }
+  }
+  // An oblique viaduct runs along the side valley behind the steeples, without closing the vanishing point.
+  aqueduct(roadAt(115).x-90,108,.98,8.5,13)
+  aqueduct(roadAt(450).x-66,390,1.48,16,15)
+  aqueduct(roadAt(935).x+67,812,1.72,15,15)
+  for(const {key,area,list} of batches.values()) {
+    const mesh=new THREE.InstancedMesh(...blocks[key],list.length)
+    list.forEach(([m,c],j)=>{mesh.setMatrixAt(j,m);mesh.setColorAt(j,c)})
+    mesh.computeBoundingSphere();scene.add(mesh)
+    const reach=key==='grass'?85:key==='stone'?100:390
+    groups.push({mesh,start:area*100-reach,end:(area+1)*100+48})
+  }
+  let prev=-100
+  return s=>{
+    const q=Math.floor(s/8)
+    if(q===prev) return
+    prev=q
+    for(const g of groups)g.mesh.visible = s>=g.start && s<=g.end
+  }
+}
+
+// Photographed Alpine ridges sit behind the local farmland. The alpha channel follows
+// the actual skyline so both the day and sunset panoramas remain visible above it.
+function distantAlps(scene){
+  const image=new THREE.TextureLoader().load(new URL('./art/alpine-ridgeline.webp',import.meta.url).href)
+  image.colorSpace=THREE.SRGBColorSpace
+  const mat=new THREE.MeshBasicMaterial({map:image,alphaTest:.3,side:THREE.DoubleSide,
+    fog:false,depthWrite:false,depthTest:false,toneMapped:false})
+  // The far bank loses contrast at its base, matching the atmospheric perspective of the last local fields.
+  const haze={value:new THREE.Color('#bfd7e1')}
+  mat.onBeforeCompile=shader=>{
+    shader.uniforms.ridgeHaze=haze
+    shader.fragmentShader=shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 ridgeHaze;')
+      .replace('#include <opaque_fragment>',`outgoingLight=mix(ridgeHaze,outgoingLight,.18+.36*smoothstep(.52,1.,vMapUv.y));
+      #include <opaque_fragment>`)
+  }
+  const layer=new THREE.Mesh(new THREE.CylinderGeometry(165,165,72,120,1,true),mat)
+  layer.renderOrder=-10
+  scene.add(layer)
+  // Geometry covers y -47..25 at the rider so only the distant massifs break the horizon.
+  layer.rotation.y=2.66
   return {
-    follow(s){ const p=roadAt(s);sky.position.set(p.x,p.y,-s) },
-    theme(dusk){
-      dome.uniforms.zenith.value.set(dusk?'#625a89':'#5097c2')
-      dome.uniforms.haze.value.set(dusk?'#f6ba88':'#d6e7db')
-      dome.uniforms.sunlight.value.set(dusk?'#ffcf76':'#fff2c0')
-      mountainLayers.forEach(mat=>mat.color.set(dusk?'#d6aaa2':'#ffffff'))
+    update(s){const r=roadAt(s);layer.position.set(r.x,r.y-14,-s)},
+    setTheme(mode){
+      const dusk=mode==='dusk'
+      mat.color.set(dusk?'#d8a898':'#e1ecfb')
+      haze.value.set(dusk?'#c69991':'#bfd7e1')
     },
   }
 }
 
 export function createWorld(scene) {
-  const hemisphere = new THREE.HemisphereLight('#e5f3ff','#9ca381',1.65)
-  const sunlight = new THREE.DirectionalLight('#fff1d1',2.0)
-  sunlight.position.set(-50,84,-42)
-  scene.add(hemisphere,sunlight)
-  scene.fog=new THREE.FogExp2('#c8dace',.0054)
-  const horizon=makeHorizon(scene)
-  const shade=groundShadows()
-  makeMeadows(scene,shade)
+  const sky=mountSky(scene,'alpine'), hills=distantAlps(scene)
+  const hemi=new THREE.HemisphereLight('#c3d6fc','#9aa847',1.1)
+  const sun=new THREE.DirectionalLight('#fff0bc',3.9)
+  sun.position.set(45,57,-50)
+  scene.add(hemi,sun)
+  scene.fog=new THREE.Fog('#b9d6e7',138,376)
+  const shade=groundShadows(),leaves=createFoliageBatch(scene)
+  makeTerrain(scene,shade)
   makeRoad(scene,shade)
-  const batch=batches(scene)
-  const wood=woodwork(scene)
-  landscapeObjects(batch,shade,wood)
-  batch.finish()
-  wood.finish()
+  const updateWood=makeOakAvenue(scene,leaves,shade)
+  const updateObjects=makeLandmarks(scene,leaves,shade)
+  leaves.flush()
+  const village=buildVillage(scene,roadAt,groundAt,shade)
   return {
     length:LENGTH,
-    update(s) { horizon.follow(s); batch.update(s) },
-    setTheme(name) {
-      const dusk=name==='dusk'
-      horizon.theme(dusk)
-      hemisphere.color.set(dusk?'#ffd2b4':'#e5f3ff')
-      hemisphere.groundColor.set(dusk?'#777187':'#9ca381')
-      sunlight.color.set(dusk?'#ffa967':'#fff1d1')
-      sunlight.position.set(-50,dusk?38:84,-42)
-      scene.fog.color.set(dusk?'#d6a18e':'#c8dace')
+    update(s){hills.update(s);updateWood(s);updateObjects(s);leaves.update(s);village.update(s)},
+    setTheme(mode){
+      const dusk=mode==='dusk'
+      sky.setTheme(mode);hills.setTheme(mode);village.setTheme(mode)
+      hemi.color.set(dusk?'#c4addf':'#c3d6fc')
+      hemi.groundColor.set(dusk?'#977046':'#9aa847')
+      hemi.intensity=dusk?.89:1.1
+      sun.color.set(dusk?'#ff9650':'#fff0bc')
+      sun.position.set(45,dusk?26:57,-50)
+      sun.intensity=dusk?3.25:3.9
+      scene.fog.color.set(dusk?'#d59c87':'#b9d6e7')
     },
   }
 }

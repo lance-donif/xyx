@@ -1,23 +1,86 @@
 import * as T from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 
-const rubber = '#202936', tread = '#35414c', graphite = '#273744'
-const silver = '#b6c4c1', darkMetal = '#596769', navy = '#213448'
-const orange = '#e45128', scarlet = '#a12c20', cream = '#f3e3b8'
-const skin = '#b77351', leather = '#442e25'
+const rubber = '#181a20', tread = '#2b2f32', graphite = '#222a32'
+const silver = '#b9bfbd', darkMetal = '#555960', navy = '#202832'
+const orange = '#a83224', scarlet = '#74190f', cream = '#f1eee3'
+const skin = '#ae7655', leather = '#26272a'
 const up = new T.Vector3(0, 1, 0)
-const finish = new T.MeshStandardMaterial({vertexColors: true, roughness: 0.73, metalness: 0.12})
+
+// A small, shared mountain-sky reflection supplies a horizon for lacquer, glass
+// and brushed metal even on renderers without scene-wide environment lighting.
+function mountainReflection() {
+  const size = 64
+  const faces = Array.from({length: 6}, (_, face) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = size
+    const ctx = canvas.getContext('2d')
+    const image = ctx.createImageData(size, size)
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const u = (2 * x + 1) / size - 1, w = (2 * y + 1) / size - 1
+      const vectors = [[1,-w,-u],[-1,-w,u],[u,1,w],[u,-1,-w],[u,-w,1],[-u,-w,-1]]
+      const [dx,dy,dz] = vectors[face]
+      const h = dy / Math.hypot(dx,dy,dz), angle = Math.atan2(dz,dx)
+      const ridge = .07 + .13 * Math.sin(angle * 3.0 + .4) + .07 * Math.cos(angle * 8)
+      const high = h >= ridge
+      const k = high ? Math.sqrt(Math.max(0, h - ridge)) : Math.max(0, -h)
+      const rgb = high ? [230-116*k,237-85*k,239-40*k] : [48+48*k,57+34*k,58+30*k]
+      const glint = Math.max(0, Math.cos(angle + 2.4)) ** 25 * Math.exp(-24*(h-.43)**2)
+      const i=(y*size+x)*4
+      for(let c=0;c<3;c++) image.data[i+c]=rgb[c]+(255-rgb[c])*glint
+      image.data[i+3]=255
+    }
+    ctx.putImageData(image,0,0)
+    return canvas
+  })
+  const texture = new T.CubeTexture(faces)
+  texture.colorSpace = T.SRGBColorSpace
+  texture.needsUpdate = true
+  return texture
+}
+
+let finish
+function riderMaterial() {
+  if (finish) return finish
+  finish = new T.MeshStandardMaterial({
+    vertexColors: true, roughness: 1, metalness: 1, envMap: mountainReflection(), envMapIntensity: .78,
+  })
+  // Per-vertex roughness and metalness let leather and chrome share a draw call.
+  finish.onBeforeCompile = shader => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 surface; varying vec2 vSurface; varying vec3 vWeave;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSurface = surface; vWeave = position;')
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vSurface; varying vec3 vWeave;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        // Tucked fabric breaks up long highlights. Fade out the thread pattern
+        // where its projected spacing falls below a pixel.
+        float textile = smoothstep(.40, .70, vSurface.x) * (1. - smoothstep(.10, .26, vSurface.y));
+        float warp = dot(vWeave, vec3(510.,340.,195.));
+        float weft = dot(vWeave, vec3(-340.,480.,235.));
+        float thread = sin(warp) * sin(weft) / (1. + fwidth(warp) + fwidth(weft));
+        diffuseColor.rgb *= 1. + .13 * textile * thread;
+      `)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor *= vSurface.x;')
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor *= max(0.,vSurface.y);')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += max(0.,-vSurface.y)*diffuseColor.rgb;')
+  }
+  return finish
+}
+const cloth = [.79,.01], hide = [.51,.07], alloy = [.26,.82], lacquer = [.21,.49], glass = [.095,.76]
+const finishes = new Map([[silver, alloy], [darkMetal, [.38,.69]], [graphite,[.55,.30]],
+  [orange,lacquer],[scarlet,lacquer],[rubber,[.92,.01]],[leather,hide],[navy,cloth]])
 
 function v(point) { return new T.Vector3(...point) }
 
 // Bake each rigid assembly into a single vertex-coloured mesh.
 function assembly() {
   const parts = []
-  function add(geometry, color, matrix = new T.Matrix4()) {
+  function add(geometry, color, matrix = new T.Matrix4(), surface = finishes.get(color) ?? cloth) {
     const shape = geometry.index ? geometry.toNonIndexed() : geometry
     shape.applyMatrix4(matrix)
     for (const name of Object.keys(shape.attributes)) {
-      if (name !== 'position' && name !== 'normal') shape.deleteAttribute(name)
+      if (name !== 'position' && name !== 'normal' && name !== 'color') shape.deleteAttribute(name)
     }
     const rgb = new T.Color(color)
     const count = shape.getAttribute('position').count
@@ -25,13 +88,17 @@ function assembly() {
     for (let i = 0; i < colors.length; i += 3) {
       colors[i] = rgb.r; colors[i+1] = rgb.g; colors[i+2] = rgb.b
     }
-    shape.setAttribute('color', new T.BufferAttribute(colors, 3))
+    const channels = new Float32Array(count * 2)
+    for (let i=0; i<channels.length; i+=2) { channels[i]=surface[0]; channels[i+1]=surface[1] }
+    if (!shape.hasAttribute('color')) shape.setAttribute('color', new T.BufferAttribute(colors, 3))
+    shape.setAttribute('surface', new T.BufferAttribute(channels, 2))
     parts.push(shape)
   }
   const rotation = angles => new T.Quaternion().setFromEuler(new T.Euler(...angles))
   const transform = (p, r, scale) => new T.Matrix4().compose(v(p), rotation(r), v(scale))
-  function oval(p, dims, color, angle = [0,0,0]) {
-    add(new T.SphereGeometry(1, 12, 8), color, transform(p, angle, dims))
+  function oval(p, dims, color, angle = [0,0,0], surface) {
+    const large = Math.max(...dims) > .075
+    add(new T.SphereGeometry(1, large ? 18 : 12, large ? 12 : 8), color, transform(p, angle, dims), surface)
   }
   function box(p, dims, color, angle = [0,0,0]) {
     add(new T.BoxGeometry(...dims), color, transform(p, angle, [1,1,1]))
@@ -47,7 +114,7 @@ function assembly() {
       transform(p, [0,Math.PI/2,0], [1,1,widthScale]))
   }
   function mesh() {
-    const result = new T.Mesh(mergeGeometries(parts), finish)
+    const result = new T.Mesh(mergeGeometries(parts), riderMaterial())
     result.castShadow = true
     return result
   }
@@ -67,12 +134,12 @@ function wheel(moto, rear) {
     a.hoop([side*.72,0,0], rim-.008, moto ? .019 : .012, moto ? silver : darkMetal)
   }
   a.tube([-.063,0,0],[.063,0,0],moto?.046:.022,moto?.046:.022,darkMetal)
-  const spokes = moto ? 9 : 18
+  const spokes = moto ? 7 : 22
   for (let i=0; i<spokes; i++) {
     const angle = 2*Math.PI*i/spokes
     const end = [0,rim*Math.cos(angle),rim*Math.sin(angle)]
     const hub = [i%2 ? .033 : -.033, .027*Math.cos(angle+.8), .027*Math.sin(angle+.8)]
-    a.tube(hub,end,moto?.009:.003,moto?.011:.003,silver,5)
+    a.tube(hub,end,moto?.015:.002,moto?.023:.002,silver,5)
   }
   if (moto) {
     const x = -.053
@@ -114,38 +181,42 @@ function cycleFrame(a) {
   // Water bottle, pump and rear reflector.
   a.tube([0,.501,-.103],[0,.631,-.21],.029,.031,cream)
   a.tube([0,.631,-.21],[0,.651,-.23],.021,.015,scarlet)
-  a.box([0,.813,.233],[.047,.030,.022],'#f5512f')
+  a.oval([0,.815,.237],[.028,.015,.013],'#e53532',[0,0,0],lacquer)
+  for (const sign of [-1,1]) {
+    const cable = new T.CatmullRomCurve3([[sign*.2,.915,-.552],[sign*.154,.832,-.586],[sign*.041,.634,-.389]].map(v))
+    a.add(new T.TubeGeometry(cable,16,.003,5,false),graphite)
+  }
 }
 
 // Longitudinal profiles for tank, seat, fenders and bodywork.
 function fairing(a, rings, upper, side, lower) {
-  const verts = [[],[],[]]
-  const cross = ([z,y,w,h]) => [
-    [-w*.62,y+h,z],[w*.62,y+h,z],[w,y+h*.48,z],[w*.82,y-h*.50,z],
-    [w*.48,y-h,z],[-w*.48,y-h,z],[-w*.82,y-h*.50,z],[-w,y+h*.48,z]
-  ]
-  const sections = rings.map(cross)
-  // Face winding points outwards as sections progress from front to back.
-  for(let k=0;k<sections.length-1;k++) {
-    const front=sections[k], back=sections[k+1]
-    for(let i=0;i<8;i++) {
-      const j=(i+1)%8, dst=verts[i===0 ? 0 : i>=3 && i<=5 ? 2 : 1]
-      dst.push(...front[i],...back[j],...front[j], ...front[i],...back[i],...back[j])
-    }
-  }
-  for(let end=0;end<2;end++){
-    const cap=sections[end ? sections.length-1 : 0]
-    for (let i=1;i<7;i++) {
-      const j=end ? 7-i : i, k=end ? 6-i : i+1
-      verts[1].push(...cap[0],...cap[j],...cap[k])
-    }
-  }
-  for (let i=0;i<3;i++) {
-    const g = new T.BufferGeometry()
-    g.setAttribute('position',new T.Float32BufferAttribute(verts[i],3))
-    g.computeVertexNormals()
-    a.add(g,[upper,side,lower][i])
-  }
+  const blue = '#214267', flanks = '#152e4a'
+  const top = upper===orange ? blue : upper
+  const edge = side===scarlet ? flanks : side
+  const sections=rings.map(([z,y,w,h])=>[z,w,h,-y])
+  const [first,...rest]=sections, last=rest[rest.length-1]
+  const rounded=[[first[0]-.005,.005,.003,first[3]],first,...rest,[last[0]+.005,.005,.003,last[3]]]
+  loft(a,rounded,[0,0,0],[Math.PI/2,0,0],angle=>{
+    const vertical=-Math.cos(angle)
+    return vertical>.52 ? top : vertical < -.56 ? lower : edge
+  },upper===orange?lacquer:hide)
+}
+
+function registrationPlate() {
+  const canvas=document.createElement('canvas')
+  canvas.width=160; canvas.height=92
+  const ctx=canvas.getContext('2d')
+  ctx.fillStyle='#d6d5be';ctx.fillRect(0,0,160,92)
+  ctx.fillStyle='#3b5682';ctx.fillRect(0,0,17,92)
+  ctx.fillStyle='#464945';ctx.font='bold 12px sans-serif';ctx.textAlign='center'
+  ctx.fillText('RIDGELINE',88,19)
+  ctx.fillStyle='#24292a';ctx.font='bold 37px sans-serif';ctx.fillText('RL 042',88,61,124)
+  for(const x of [23,150]) { ctx.beginPath();ctx.arc(x,8,2.5,0,2*Math.PI);ctx.fill() }
+  const map=new T.CanvasTexture(canvas)
+  map.colorSpace=T.SRGBColorSpace
+  const plate=new T.Mesh(new T.PlaneGeometry(.129,.086),new T.MeshStandardMaterial({map,roughness:.64}))
+  plate.position.set(0,.64,.806);plate.rotation.x=-.26
+  return plate
 }
 
 function motoFrame(a) {
@@ -187,124 +258,305 @@ function motoFrame(a) {
           orange,scarlet,graphite)
   fairing(a,[[-.95,.55,.055,.017],[-.78,.663,.096,.022],[-.64,.683,.10,.018],[-.48,.609,.078,.019]],
           orange,scarlet,graphite)
-  a.box([0,.76,.799],[.138,.052,.026],'#ff4135')
-  a.box([0,.714,.777],[.113,.024,.031],graphite)
-  a.box([0,.666,.788],[.116,.074,.013],cream,[-.24,0,0])
+  // The upswept LED tail sits below the pillion cowl, with a separate hanging plate.
+  a.oval([0,.773,.80],[.106,.037,.029],graphite,[-.10,0,0])
+  a.oval([0,.774,.822],[.091,.023,.013],'#e43525',[-.06,0,0],[.2,-.72])
+  for(const s of [-1,1]) {
+    a.tube([s*.014,.769,.836],[s*.076,.78,.828],.004,.003,'#ffaca1',7)
+    a.tube([s*.026,.737,.75],[s*.040,.65,.79],.009,.008,graphite)
+  }
+  a.box([0,.64,.799],[.129,.086,.012],'#e0dcc5',[-.26,0,0])
   for (const s of [-1,1]) {
     a.tube([s*.099,.75,.745],[s*.182,.75,.745],.010,.010,graphite)
     a.oval([s*.182,.75,.749],[.025,.019,.026],'#ffb02d')
   }
-  a.oval([0,.866,-.53],[.112,.094,.071],graphite)
-  a.oval([0,.874,-.587],[.089,.072,.030],'#ffe6a3')
+  fairing(a,[[-.69,.76,.061,.043],[-.63,.815,.152,.101],[-.52,.866,.169,.114],[-.41,.876,.128,.053]],
+    orange,scarlet,graphite)
+  a.oval([0,.934,-.534],[.133,.09,.045],'#384e61',[-.55,0,0],glass)
+  for(const s of [-1,1]) {
+    a.oval([s*.087,.835,-.616],[.063,.029,.022],'#eee9ce',[-.4,0,s*.19],glass)
+    const sideCover = [s*.155,.608,-.116]
+    a.oval(sideCover,[.027,.114,.176],'#213c57',[-.34,0,0],lacquer)
+    a.tube([s*.164,.607,-.025],[s*.174,.65,-.185],.007,.002,'#bcced4',6)
+  }
   a.box([0,.919,-.476],[.119,.046,.077],darkMetal,[-.3,0,0])
+
 }
 
-// Sectioned jacket follows the riding posture. Positive local Z is the back.
-function jersey(a, moto) {
-  const rows = [
-    [0,.162,.117], [.05,.175,.117],[.16,.18,.120],
-    [.30,.218,.133],[.385,.208,.119],[.432,.123,.076],
+// Sections describe height, half-width, half-depth and the fore/aft centre.
+// Interpolated oval rings form a continuous silhouette and smooth normals.
+function loft(a, sections, base, angles, pigment, surface, sculpt) {
+  const profile = new T.CatmullRomCurve3(sections.map(([h,w,d]) => new T.Vector3(w,h,d)))
+  const spine = new T.CatmullRomCurve3(sections.map(([h,w,d,cz=0]) => new T.Vector3(0,h,cz)))
+  const rows = (sections.length-1)*2, sides = sculpt ? 32 : 20
+  const positions = [], index = [], colors = []
+  const color = new T.Color()
+  for (let row=0;row<=rows;row++) {
+    const t=row/rows, ring=profile.getPoint(t), cz=spine.getPoint(t).z
+    for(let i=0;i<sides;i++) {
+      const theta = 2*Math.PI*i/sides
+      const [sw,sd] = sculpt ? sculpt(theta,t) : [1,1]
+      positions.push(Math.sin(theta)*ring.x*sw, ring.y, Math.cos(theta)*ring.z*sd+cz)
+      color.set(typeof pigment === 'function' ? pigment(theta,t) : pigment)
+      colors.push(color.r,color.g,color.b)
+      if (row===rows) continue
+      const m = row*sides+i, n = row*sides+(i+1)%sides
+      index.push(m,n,m+sides,n,n+sides,m+sides)
+    }
+  }
+  const geo=new T.BufferGeometry()
+  geo.setIndex(index)
+  geo.setAttribute('position',new T.Float32BufferAttribute(positions,3))
+  geo.setAttribute('color',new T.Float32BufferAttribute(colors,3))
+  geo.computeVertexNormals()
+  const matrix=new T.Matrix4().compose(v(base),new T.Quaternion().setFromEuler(new T.Euler(...angles)),new T.Vector3(1,1,1))
+  a.add(geo,'#ffffff',matrix,surface)
+}
+
+function jacket(a, moto, red) {
+  const fabric=moto?'#242632':red?'#bb3728':'#e7e2d9'
+  const side=moto?'#171d25':red?'#7e2018':'#b0b5b0'
+  const seam=moto?'#484952':red?'#ce6950':'#ccd1cc'
+  const tilt = moto ? -.52 : -.97
+  const base = moto ? [0,.875,.196] : [0,.934,.18]
+  const cross = [
+    [0,.144,.099], [.045,.153,.104], [.095,.148,.116], [.19,.163,.131],
+    [.29,.195,.139,-.006], [.35,.215,.125,-.011],
+    [.387,.198,.105,-.015], [.423,.122,.083,-.017], [.436,.079,.069,-.014],
   ]
-  const tilt = moto ? -.35 : -.77
-  const base = moto ? [0,.918,.156] : [0,.95,.159]
-  const mat = new T.Matrix4().compose(v(base),
-    new T.Quaternion().setFromEuler(new T.Euler(tilt,0,0)),new T.Vector3(1,1,1))
-  const sectors = 16
-  const colors = new Map()
-  for (let row=0; row<rows.length-1; row++) {
-    const point=(r,i)=>{
-      const [h,w,d]=rows[r], ang=2*Math.PI*i/sectors
-      return [w*Math.sin(ang),h,d*Math.cos(ang)]
+  const matrix = new T.Matrix4().compose(v(base),new T.Quaternion().setFromEuler(new T.Euler(tilt,0,0)),new T.Vector3(1,1,1))
+  const at = (x,y,z) => new T.Vector3(x,y,z).applyMatrix4(matrix).toArray()
+  const paint = (angle,t) => {
+    const flank=Math.abs(Math.sin(angle))
+    if (t<.055) return side
+    if (flank>.94-t*.07 && t<.90) return side
+    return fabric
+  }
+  // Paired shoulder blades, flatter spine and small compressed lumbar folds.
+  const sculpt = (angle,t) => {
+    const fold=Math.sin(t*100+Math.cos(angle*2)*1.4)*Math.exp(-((t-.24)**2)/.014)
+    const blade=Math.exp(-((t-.67)**2)/.047)*Math.max(0,Math.cos(angle))*Math.sin(angle*2)**2
+    return [1+.021*fold,1+.033*fold+.085*blade]
+  }
+  loft(a,cross,base,[tilt,0,0],paint,moto?hide:cloth,sculpt)
+  function stitch(path,color,r=.0028) {
+    for(let i=1;i<path.length;i++) a.tube(at(...path[i-1]),at(...path[i]),r,r,color,5)
+  }
+  for (const sign of [-1,1]) {
+    stitch([[sign*.122,.026,.062],[sign*.123,.092,.079],[sign*.126,.19,.09],[sign*.148,.29,.088],[sign*.161,.37,.068],[sign*.177,.386,.028]],seam)
+    stitch([[sign*.17,.377,.059],[sign*.119,.346,.103],[sign*.061,.339,.12],[0,.337,.124]],seam,.002)
+    if (!moto) {
+      stitch([[sign*.128,.134,.077],[sign*.077,.144,.108],[0,.141,.124]],side,.004)
+      stitch([[sign*.044,.041,.101],[sign*.046,.103,.117],[sign*.045,.142,.123]],seam,.0024)
     }
-    for (let i=0;i<sectors;i++) {
-      const side=i>=3 && i<=4 || i>=11 && i<=12
-      let c = moto ? '#34475a' : '#ece2bd'
-      if (row===0) c=moto ? graphite : orange
-      else if (side) c=moto ? '#243140' : orange
-      else if (row===3 && moto) c='#6f7978'
-      else if (row===4) c=moto ? '#253545' : cream
-      if(!colors.has(c)) colors.set(c,[])
-      colors.get(c).push(...point(row,i),...point(row,i+1),...point(row+1,i+1),
-                         ...point(row,i),...point(row+1,i+1),...point(row+1,i))
-    }
   }
-  for (const [color,positions] of colors) {
-    const geo = new T.BufferGeometry().setAttribute('position',new T.Float32BufferAttribute(positions,3))
-    geo.computeVertexNormals()
-    a.add(geo,color,mat)
+  if(moto) {
+    stitch([[0,.073,.109],[0,.163,.13],[0,.25,.136],[0,.336,.126]],'#2f3239',.0036)
+    // Reinforced leather kidney band below the jacket hem.
+    a.oval(at(0,.013,.006),[.15,.03,.105],'#191c22',[tilt,0,0],hide)
   }
-  // Rear pockets and twin race bands sit flush with the curved fabric.
-  const back=(x,y,z)=>new T.Vector3(x,y,z).applyMatrix4(mat).toArray()
-  a.box(back(0,.106,.108),[.22,.102,.027],moto ? '#263543' : '#d05a36',[tilt,0,0])
-  for (const x of [-.072,.072]) {
-    a.tube(back(x,.066,.121),back(x,.148,.127),.005,.005,moto ? '#929785' : cream,5)
-  }
+  return {fabric,side,seam}
 }
 
-function buildUpper(moto) {
+function limb(a, start, end, profile, color, surface) {
+  const vector=v(end).sub(v(start))
+  const length=vector.length()
+  const q=new T.Quaternion().setFromUnitVectors(up,vector.normalize())
+  const angles=new T.Euler().setFromQuaternion(q)
+  const rings=profile.map(([t,w,d,cz=0]) => [t*length,w,d,cz])
+  loft(a,rings,start,[angles.x,angles.y,angles.z],color,surface)
+}
+
+function buildUpper(moto,red=false) {
   const a=assembly()
-  jersey(a,moto)
-  const shoulderY=moto?1.263:1.235, shoulderZ=moto?.021:-.093
-  const headY=moto?1.485:1.441, headZ=moto?-.046:-.193
-  const elbowY=moto?1.04:1.036, elbowZ=moto?-.16:-.195
-  const handX=moto?.30:.207, handY=moto?.974:.93, handZ=moto?-.43:-.515
-  for (const s of [-1,1]) {
-    const shoulder=[s*.188,shoulderY,shoulderZ], elbow=[s*(moto?.30:.242),elbowY,elbowZ]
-    const hand=[s*handX,handY,handZ]
-    const sleeve=[s*.231, shoulderY-.115, shoulderZ-.049]
-    a.oval(shoulder,[.077,.079,.078],moto?'#34475a':cream)
-    a.tube(shoulder,sleeve,.073,.066,moto?'#34475a':cream)
-    a.tube(sleeve,elbow,.057,.048,moto?navy:skin)
-    a.oval(elbow,[.051,.048,.052],moto?graphite:skin)
-    a.tube(elbow,hand,.049,.030,moto?navy:skin)
-    a.oval(hand,[.035,.035,.052],moto?graphite:'#623e2a')
-  }
-  a.tube([0,headY-.178,headZ+.055],[0,headY-.052,headZ],.069,.067,skin)
-  if (moto) {
-    a.oval([0,headY,headZ],[.13,.15,.139],'#172b3d',[-.09,0,0])
-    a.oval([0,headY+.026,headZ-.054],[.128,.061,.106],'#669099',[-.11,0,0])
-    a.oval([0,headY+.065,headZ+.01],[.133,.098,.146],'#253e56',[-.10,0,0])
-    a.oval([0,headY+.072,headZ+.015],[.027,.097,.148],cream,[-.10,0,0])
-    a.box([0,headY-.051,headZ+.122],[.09,.018,.010],'#c49e69')
-  } else {
-    a.oval([0,headY-.034,headZ],[.091,.120,.090],skin,[-.13,0,0])
-    a.oval([0,headY-.004,headZ+.049],[.092,.084,.059],leather)
-    a.oval([0,headY+.033,headZ+.009],[.111,.097,.151],'#263747',[-.16,0,0])
-    // Vented road helmet: four distinct moulded ribs over a dark liner.
-    for (const s of [-1,1]) {
-      a.oval([s*.029,headY+.053,headZ+.003],[.027,.082,.152],orange,[-.18,0,s*.10])
-      a.oval([s*.078,headY+.039,headZ+.001],[.021,.070,.128],cream,[-.18,0,s*.22])
-      a.tube([s*.089,headY+.008,headZ+.048],[s*.083,headY-.099,headZ-.005],.007,.007,graphite,5)
+  const {fabric,side,seam}=jacket(a,moto,red)
+  const shoulderY=moto?1.20:1.153, shoulderZ=moto?-.002:-.134
+  const headY=moto?1.411:1.313, headZ=moto?-.135:-.277
+  const handX=moto?.306:.207, handY=moto?.968:.92, handZ=moto?-.429:-.53
+  for (const sign of [-1,1]) {
+    const shoulder=[sign*.185,shoulderY,shoulderZ], elbow=[sign*(moto?.299:.256),moto?1.025:1.009,moto?-.13:-.201]
+    const hand=[sign*handX,handY,handZ]
+    const sleeve=v(shoulder).lerp(v(elbow),moto?.89:.61).toArray()
+    const inner=[shoulder[0]-sign*.052,shoulder[1]+.006,shoulder[2]+.011]
+    limb(a,inner,sleeve,[[0,.048,.058],[.20,.073,.078],[.43,.073,.076],[.67,.066,.070],[1,.054,.058]],fabric,moto?hide:cloth)
+    limb(a,sleeve,elbow,[[0,.054,.058],[.44,.05,.055],[1,.051,.049]],moto?side:skin,moto?hide:cloth)
+    a.oval(elbow,[.053,.05,.051],moto?side:skin)
+    limb(a,elbow,hand,[[0,.05,.05],[.28,.052,.053],[.55,.043,.045],[.83,.033,.032],[1,.032,.028]],moto?fabric:skin,moto?hide:cloth)
+    if(moto) {
+      a.oval([elbow[0]+sign*.032,elbow[1]+.022,elbow[2]+.02],[.026,.064,.05],side,[-.35,0,0],hide)
+      a.tube([sign*.24,shoulderY+.026,shoulderZ],[sign*.291,elbow[1]+.046,elbow[2]+.028],.0025,.0025,seam,5)
     }
-    a.oval([0,headY-.004,headZ-.053],[.099,.034,.059],'#243d46',[-.18,0,0])
+    a.oval(hand,[.039,.032,.053],moto?'#171b21':'#323439',[-.12,0,0],hide)
+    for(let j=0;j<3;j++) a.oval([hand[0]+sign*.012,hand[1]-.022,hand[2]-.028+j*.02],[.025,.017,.012],moto?graphite:skin)
+  }
+  a.tube([0,headY-.18,headZ+.115],[0,headY-.056,headZ+.018],.075,.059,moto?'#282931':skin)
+  a.oval([0,headY-.165,headZ+.095],[.085,.05,.084],fabric,[-.47,0,0],moto?hide:cloth)
+  if (moto) {
+    // A full-face shell includes the flared lower edge, curved chin and rear spoiler.
+    const shell='#203048'
+    loft(a,[[-.122,.073,.082,-.009],[-.087,.105,.118,-.019],[-.028,.125,.145,-.016],
+      [.044,.133,.144,.004],[.106,.118,.124,.004],[.148,.080,.084],[.165,.012,.025]], [0,headY,headZ],[-.10,0,0],shell,lacquer)
+    a.oval([0,headY+.022,headZ-.061],[.13,.062,.101],'#283f50',[-.16,0,0],glass)
+    a.oval([0,headY+.063,headZ+.092],[.108,.020,.066],'#293a50',[-.1,0,0],lacquer)
+    for(const sign of [-1,1]){
+      a.oval([sign*.118,headY+.012,headZ-.023],[.012,.025,.029],graphite)
+      a.oval([sign*.072,headY+.062,headZ+.118],[.030,.009,.011],'#121b25')
+      a.tube([sign*.037,headY-.057,headZ+.121],[sign*.078,headY-.046,headZ+.109],.003,.002,'#9babb6',5)
+    }
+    a.oval([0,headY-.059,headZ+.121],[.028,.006,.004],'#a8a69a')
+  } else {
+    loft(a,[[-.127,.022,.039,-.036],[-.101,.058,.063,-.027],[-.070,.077,.074,-.012],
+      [-.025,.089,.084], [.028,.09,.092,.008],[.085,.069,.075,.01],[.102,.024,.036]],
+      [0,headY,headZ],[-.17,0,0],skin,cloth)
+    a.oval([0,headY-.038,headZ-.087],[.019,.026,.025],skin,[-.23,0,0])
+    a.oval([0,headY+.005,headZ+.045],[.086,.083,.067],'#423126',[-.13,0,0])
+    a.oval([0,headY+.065,headZ+.012],[.108,.086,.146],'#202a32',[-.19,0,0])
+    for (const sign of [-1,1]) {
+      a.oval([sign*.026,headY+.078,headZ+.006],[.023,.079,.149],'#dedbd1',[-.2,0,sign*.09],lacquer)
+      a.oval([sign*.073,headY+.064,headZ+.007],[.022,.065,.134],'#f0eee1',[-.2,0,sign*.22],lacquer)
+      a.tube([sign*.089,headY+.027,headZ+.051],[sign*.081,headY-.080,headZ+.005],.005,.005,graphite,5)
+      a.tube([sign*.081,headY-.080,headZ+.005],[sign*.085,headY+.025,headZ-.067],.005,.005,graphite,5)
+      a.oval([sign*.086,headY-.013,headZ+.006],[.012,.027,.018],skin)
+    }
+    a.oval([0,headY+.007,headZ-.063],[.096,.033,.061],'#253d4c',[-.23,0,0],glass)
   }
   return a.mesh()
 }
 
 function legParts(moto) {
   const thigh = assembly(), shin = assembly(), shoe = assembly()
-  // Rigid limb pieces are aligned along local +Y and scaled to their joint span.
-  thigh.tube([0,0,0],[0,.65,0],.094,.077,navy)
-  thigh.tube([0,.65,0],[0,.80,0],.077,.065,moto?navy:'#323e42')
-  thigh.tube([0,.80,0],[0,1,0],.065,.055,moto?graphite:skin)
-  shin.tube([0,0,0],[0,.43,0],.055,.058,moto?navy:skin)
-  shin.tube([0,.43,0],[0,.67,0],.058,.042,moto?graphite:skin)
-  shin.tube([0,.67,0],[0,1,0],.043,.032,moto?leather:cream)
-  shoe.oval([0,-.012,-.039],[.046,.042,.095],moto?leather:graphite,[-.06,0,0])
-  shoe.box([0,-.039,-.034],[.072,.017,.143],rubber)
+  // Profiles follow hip, quadriceps, patella, calf, then Achilles; the pose
+  // animation scales only their longitudinal axis to place the joints.
+  const pants = moto?'#2d394e':'#292c33'
+  const thighPaint=(angle,t)=>!moto && t>.78 ? skin : !moto && t>.735 ? '#36393d' : pants
+  loft(thigh,[[0,.093,.10],[.16,.099,.106],[.46,.086,.094],[.67,.074,.083],[.81,.063,.068],[1,.055,.056]],
+    [0,0,0],[0,0,0],thighPaint,moto?hide:cloth)
+  const lowerPaint=(angle,t)=>moto ? t>.5?'#282729':pants : t>.69?cream:skin
+  shin.oval([0,.018,0],[.056,.16,.055],moto?pants:skin)
+  thigh.oval([0,.018,0],[.093,.15,.096],pants)
+  loft(shin,[[0,.055,.057],[.16,.054,.064],[.30,.059,.073],[.48,.054,.063],[.7,.040,.048],[.86,.033,.037],[1,.034,.035]],
+    [0,0,0],[0,0,0],lowerPaint,moto?hide:cloth)
+  shoe.oval([0,-.005,-.044],[.054,.045,.112],moto?'#25252a':'#d6d2c7',[-.09,0,0],hide)
+  shoe.oval([0,-.036,-.044],[.052,.016,.11],rubber)
+  shoe.oval([0,.007,.026],[.043,.056,.039],moto?leather:'#bfc1b9')
+  for (let i=0;i<2;i++) shoe.oval([0,.026-i*.009,-.042-i*.028],[.044,.007,.014],moto?graphite:'#5b5c59')
   return [thigh.mesh(),shin.mesh(),shoe.mesh()]
 }
 
 const shadowColors = new Uint8Array(32*32*4)
 for(let y=0;y<32;y++) for(let x=0;x<32;x++) {
   const i=(y*32+x)*4, r=Math.hypot((x-15.5)/15.5,(y-15.5)/15.5)
-  shadowColors.set([26,40,46,Math.round(105*Math.pow(Math.max(0,1-r*r),2))],i)
+  shadowColors.set([4,6,9,Math.round(160*Math.pow(Math.max(0,1-r*r),2))],i)
 }
 const shadowMap = new T.DataTexture(shadowColors,32,32,T.RGBAFormat)
+shadowMap.colorSpace=T.SRGBColorSpace
 shadowMap.magFilter=T.LinearFilter
 shadowMap.minFilter=T.LinearFilter
 shadowMap.needsUpdate=true
 const shadowMaterial = new T.MeshBasicMaterial({map:shadowMap,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-1})
+
+// The sun projects the live pose onto a small road-conforming decal. Both tyre
+// rings remain hollow, so the cast shadow shows spokes and gaps in the frame.
+function silhouette(group, moto, radius, wheelBase, legs) {
+  const size=320, span=7.6, scale=size/span
+  const canvas=document.createElement('canvas')
+  canvas.width=canvas.height=size
+  const ctx=canvas.getContext('2d')
+  const texture=new T.CanvasTexture(canvas)
+  texture.colorSpace=T.SRGBColorSpace
+  texture.generateMipmaps=false
+  texture.minFilter=T.LinearFilter
+  const floor=new T.PlaneGeometry(span,span,4,4).rotateX(-Math.PI/2)
+  const points=floor.attributes.position, resting=points.array.slice()
+  const mesh=new T.Mesh(floor,new T.MeshBasicMaterial({
+    map:texture, transparent:true, opacity:.68, depthWrite:false,
+    polygonOffset:true, polygonOffsetFactor:-2, toneMapped:false,
+  }))
+  mesh.renderOrder=2
+  group.add(mesh)
+  let sun=new T.Vector3(-.8,.8,-.49), road
+  let nextPaint=0, oldYaw=Infinity, oldTilt=Infinity
+  const inverse=new T.Quaternion(), dir=new T.Vector3()
+  function update(dt, tilt, bob, force=false) {
+    const c=Math.cos(tilt), q=Math.sin(tilt)
+    const yaw=group.rotation.y, cy=Math.cos(yaw), sy=Math.sin(yaw)
+    // Compensate pitch and the suspension bounce independently of the lighting.
+    // The mesh itself stays in the chassis coordinate system.
+    if(road) {
+      const cp=Math.cos(group.rotation.x), sp=Math.sin(group.rotation.x)
+      for(let i=0;i<points.count;i++) {
+        const localX=resting[i*3], localZ=resting[i*3+2]
+        const worldZ=group.position.z-localX*sy+localZ*cp*cy
+        const elevation=road(-worldZ).y + .024
+        points.setY(i,(elevation-group.position.y+localZ*sp)/cp)
+      }
+      points.needsUpdate=true
+    } else mesh.position.y=.021
+    nextPaint-=dt
+    if (!force && nextPaint>0 && Math.abs(tilt-oldTilt)<.03 && Math.abs(yaw-oldYaw)<.03) return
+    nextPaint=1/13
+    oldYaw=yaw;oldTilt=tilt
+    inverse.copy(group.quaternion).invert()
+    dir.copy(sun).normalize().applyQuaternion(inverse)
+    const sx=dir.x/Math.max(.24,dir.y), sz=dir.z/Math.max(.24,dir.y)
+    function point(x,y,z) {
+      const xx=x*c-y*q, yy=x*q+y*c
+      return [(xx-yy*sx)*scale+size/2,(z-yy*sz)*scale+size/2]
+    }
+    function line(from,to,width) {
+      const [x,y]=point(...from), [u,v]=point(...to)
+      ctx.beginPath(); ctx.moveTo(x,y);ctx.lineTo(u,v);ctx.lineWidth=width*scale;ctx.stroke()
+    }
+    function oval(x,y,z,rx,ry,rz) {
+      const [u,v]=point(x,y,z)
+      const ax=rx*(c-q*sx), ay=-rx*q*sz, bx=ry*(-q-c*sx), by=-ry*c*sz
+      const a=ax*ax+bx*bx, b=ax*ay+bx*by, d=ay*ay+by*by+rz*rz
+      const delta=Math.hypot(a-d,2*b)
+      ctx.beginPath()
+      ctx.ellipse(u,v,scale*Math.sqrt((a+d+delta)/2),scale*Math.sqrt(Math.max(.00001,(a+d-delta)/2)),.5*Math.atan2(2*b,a-d),0,Math.PI*2)
+      ctx.fill()
+    }
+    ctx.clearRect(0,0,size,size)
+    ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle=ctx.fillStyle='#060d1b'
+    for(const end of [-1,1]){
+      const z=wheelBase*end, tire=moto?.097:.032
+      ctx.beginPath()
+      for(let i=0;i<=44;i++) {
+        const t=i*Math.PI/22, [px,py]=point(0,radius+(radius-tire/2)*Math.sin(t),z+(radius-tire/2)*Math.cos(t))
+        if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py)
+      }
+      ctx.lineWidth=tire*scale;ctx.stroke()
+      for(let i=0;i<(moto?5:9);i++) {
+        const t=i*Math.PI/(moto?5:9)
+        line([0,radius+.29*Math.sin(t),z+.29*Math.cos(t)],[0,radius-.29*Math.sin(t),z-.29*Math.cos(t)],moto?.019:.009)
+      }
+    }
+    const seat=[0,moto?.78:.86,.16], crank=[0,moto?.48:.305,.04], head=[0,.80,-.38]
+    for(const [from,to] of [[seat,crank],[crank,head],[head,seat],[crank,[0,radius,wheelBase]],[seat,[0,radius,wheelBase]],[head,[0,radius,-wheelBase]]]) line(from,to,moto?.08:.036)
+    if(moto) {
+      oval(0,.65,0,.17,.19,.40);oval(0,.78,.43,.17,.085,.32)
+      line([0,.33,.27],[.18,.52,.69],.08)
+    }
+    const chest=[0,moto?1.16:1.10,moto?.015:-.11], hip=[0,moto?.90:.94,.16]
+    line(hip,chest,.31)
+    oval(0,chest[1]+bob,chest[2],.208,.15,.13)
+    oval(0,moto?1.425:1.36,moto?-.14:-.28,.122,.145,.14)
+    for(let i=0;i<2;i++){
+      const sign=i?1:-1, [,shin,shoe]=legs[i]
+      const knee=shin.position.toArray(), ankle=shoe.position.toArray()
+      line([sign*.096,hip[1],hip[2]],knee,.147);line(knee,ankle,.089)
+      oval(...ankle,.05,.049,.115)
+      const elbow=[sign*(moto?.30:.256),1.02,moto?-.13:-.2]
+      line([sign*.18,chest[1],chest[2]],elbow,.112)
+      line(elbow,[sign*(moto?.30:.207),moto?.97:.92,moto?-.43:-.53],.075)
+    }
+    texture.needsUpdate=true
+  }
+  return {
+    update,
+    setLighting(position,roadFn) { if(position) sun=position;road=roadFn;nextPaint=0 },
+  }
+}
 
 export function createRider(type) {
   const moto = type === 'moto'
@@ -314,8 +566,10 @@ export function createRider(type) {
   contact.position.y=.012
   group.add(contact,pivot)
   const frame = assembly()
-  if (moto) motoFrame(frame)
-  else cycleFrame(frame)
+  if (moto) {
+    motoFrame(frame)
+    pivot.add(registrationPlate())
+  } else cycleFrame(frame)
   pivot.add(frame.mesh())
   const radius=moto?.322:.345, wheelBase=moto?.68:.56
   const wheels=[wheel(moto,false),wheel(moto,true)]
@@ -323,7 +577,8 @@ export function createRider(type) {
     w.position.set(0,radius,(i?1:-1)*wheelBase)
     pivot.add(w)
   })
-  const upper=buildUpper(moto), hips=assembly()
+  let upper=buildUpper(moto)
+  const kits=new Map([['ivory',upper]]), hips=assembly()
   hips.oval([0,moto?.896:.926,.165],[.159,.104,.142],navy,[-.14,0,0])
   pivot.add(upper,hips.mesh())
   const legs=[legParts(moto),legParts(moto)]
@@ -346,6 +601,7 @@ export function createRider(type) {
     part.scale.y=direction.length()
     part.quaternion.setFromUnitVectors(up,direction.normalize())
   }
+  const cast=silhouette(group,moto,radius,wheelBase,legs)
   let angle=0, phase=0, tilt=0
   function update(dt,speed,steer,time=0) {
     const moving=Math.abs(speed)
@@ -373,8 +629,19 @@ export function createRider(type) {
       }
       align(thigh,hip,knee); align(shin,knee,ankle)
       shoe.position.copy(ankle)
+      shoe.rotation.x=moto ? -.08 : -.10+.17*Math.sin(phase+(side<0?Math.PI:0))
     })
+    cast.update(dt,tilt,bob)
+  }
+  function setKit(name) {
+    if(moto || !['red','ivory'].includes(name)) return
+    if(!kits.has(name)) kits.set(name,buildUpper(false,name==='red'))
+    if(upper!==kits.get(name)) {
+      pivot.remove(upper)
+      upper=kits.get(name)
+      pivot.add(upper)
+    }
   }
   update(0,0,0,0)
-  return {group,update}
+  return {group,update,setKit,setLighting:cast.setLighting}
 }

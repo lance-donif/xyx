@@ -35,7 +35,7 @@ button svg, .course-class svg, .metric svg {
 .vignette, .menu-shade { position: absolute; inset: 0; pointer-events: none; }
 .vignette {
   z-index: -2;
-  background: linear-gradient(180deg,rgba(8,20,25,.62),transparent 21%,transparent 73%,rgba(12,23,26,.51));
+  background: linear-gradient(180deg,rgba(8,20,25,.32),transparent 14%,transparent 85%,rgba(12,23,26,.26));
 }
 .menu-shade {
   z-index: -1; display: none;

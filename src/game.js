@@ -4,6 +4,8 @@ import { coastAt, createCoast } from './coast.js';
 import { createRider } from './rider.js';
 import { createGates, COURSE_LENGTH, GATE_HALF_WIDTH } from './gates.js';
 import { createAudio } from './audio.js';
+import { addCanopyLight } from './sunshafts.js';
+import { trackSunlight } from './sunshadow.js';
 
 const get = id => document.getElementById(id);
 const routes = {
@@ -40,19 +42,47 @@ const camera = new THREE.PerspectiveCamera(56, 1, 0.09, 365);
 const cameraAim = new THREE.Vector3(), target = new THREE.Vector3(), eye = new THREE.Vector3();
 let distance = startLine, speed = 0, offset = 0, lateralSpeed = 0, lean = 0;
 let elapsed = 0, passed = 0, nextGate = 0, noticeFor = 0;
+let cameraBank = 0;
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let last = 0, worldTime = 0, uiTime = 0, resolution = 1.5, slowSeconds = 0;
+let previewFrame = 0;
+function refreshPreview() {
+  if (mode === 'racing' || previewFrame) return;
+  previewFrame = requestAnimationFrame(() => {
+    previewFrame = 0;
+    if (scene && mode !== 'racing') renderer.render(scene, camera);
+  });
+}
 function selectScene() {
   if (rider) rider.group.removeFromParent();
   const def = routes[route];
   if (!scenes.has(route)) {
     const next = new THREE.Scene();
-    scenes.set(route, { scene: next, environment: def.create(next), gates: createGates(next, def.road) });
+    next.addEventListener('skychange', () => { if (scene === next) refreshPreview(); });
+    const landscape = def.create(next);
+    scenes.set(route, {
+      scene: next, environment: landscape, gates: createGates(next, def.road),
+      sunlight: trackSunlight(next, def.road),
+      setDusk: route === 'alpine' ? addCanopyLight(next, def.road) : null
+    });
   }
   ({scene, environment, gates} = scenes.get(route));
-  environment.setTheme?.(vehicle === 'cycle' ? 'dusk' : 'day');
+  const dusk = route === 'alpine' && vehicle === 'cycle';
+  environment.setTheme?.(dusk ? 'dusk' : 'day');
+  scenes.get(route).setDusk?.(dusk);
+  scenes.get(route).sunlight.reset();
+  camera.far = route === 'coast' ? 1300 : 900;
+  camera.updateProjectionMatrix();
   if (!riders.has(vehicle)) riders.set(vehicle, createRider(vehicle));
   rider = riders.get(vehicle);
   scene.add(rider.group);
+  // The moving rider has its own ground projection, so a cached map only contains scenery.
+  rider.group.traverse(object => {
+    if (object.isMesh) { object.castShadow = false; object.receiveShadow = true; }
+  });
+  const sun = scene.getObjectByProperty('isDirectionalLight', true);
+  rider.setLighting?.(sun?.position, def.road);
+  rider.setKit?.(dusk ? 'red' : 'ivory');
   for (const button of document.querySelectorAll('[data-vehicle]')) {
     button.setAttribute('aria-pressed', String(button.dataset.vehicle === vehicle));
   }
@@ -103,7 +133,7 @@ function showMenu() {
 function finish() {
   const misses = gates.checkpoints.length - passed;
   const score = elapsed + misses * 3;
-  const key = 'best.v1.' + route + '.' + vehicle;
+  const key = 'best.ridge2.' + route + '.' + vehicle;
   const previous = Number(load(key));
   const best = previous > 0 ? Math.min(previous, score) : score;
   save(key, String(best));
@@ -137,8 +167,10 @@ function step(dt, clockDelta) {
   const desired = braking ? 8 : offroad ? 13 : cruise + (held('boost') ? 13 : 0);
   speed = damp(speed, desired, braking ? 2.2 : 0.72, dt);
   const steer = Number(held('right')) - Number(held('left'));
-  lateralSpeed = damp(lateralSpeed, steer * (4.3 + speed * 0.045)
-    - clamp(curvature * speed * speed * 0.32, -3.1, 3.1), 5.8, dt);
+  // The neutral line follows the bend. Steering can still place either wheel on the verge.
+  const slip = clamp(curvature * speed * speed * 0.11, -0.70, 0.70);
+  const correction = steer === 0 ? offset * 0.95 : 0;
+  lateralSpeed = damp(lateralSpeed, steer * (4.3 + speed * 0.045) - slip - correction, 5.8, dt);
   const oldOffset = offset;
   offset = clamp(offset + lateralSpeed * dt, -4.25, 4.25);
   lean = damp(lean, clamp(steer * 0.9 - curvature * speed * 0.75, -1, 1), 5, dt);
@@ -177,24 +209,45 @@ function setView(dt, snap = false) {
   rider.group.rotation.x = Math.atan(slope);
   rider.update(dt, preview ? 0 : speed, preview ? 0 : lean, worldTime);
   const portrait = camera.aspect < 0.8;
-  const camDist = preview ? (portrait ? 6.6 : 5.2) : (vehicle === 'cycle' ? 4.8 : 5.1);
-  const side = preview && !portrait ? 1.65 + Math.sin(worldTime * 0.23) * 0.08 : 0;
-  eye.set(center.x + offset * 0.83 - sin * camDist + cos * side,
-    center.y - slope * camDist + (preview ? 2.62 : 2.35), -s + cos * camDist + sin * side);
-  const lookAhead = preview ? 10 : 10 + speed * 0.09;
+  const coast = route === 'coast';
+  const biking = vehicle === 'cycle';
+  const camDist = preview ? (portrait ? 6.8 : 6.2) : (biking ? 4.55 : 4.85);
+  // Start over the outside shoulder on the coast, looking across the trail toward the bay.
+  // In a corner, the rider moves across the frame before the chase camera catches up.
+  const side = preview ? (portrait ? -0.65 : coast ? -2 : 1.1)
+    : (coast ? -0.85 : 0.10) - lean * 0.64;
+  const height = preview ? (coast ? 3.05 : 3.3) : (coast ? 2.67 : 2.45);
+  eye.set(center.x + offset * 0.70 - sin * camDist + cos * side,
+    center.y - slope * camDist * (coast ? 0.56 : 0.72) + height + bob * 0.35, -s + cos * camDist + sin * side);
+  const lookAhead = preview ? 17 : 13 + speed * 0.12;
   const front = road(s + lookAhead);
-  const composition = preview && !portrait ? -4.1 : 0;
-  target.set(front.x + offset * 0.8 + composition * cos, front.y + (preview ? 1.6 : 1.32),
-    -s - lookAhead + composition * sin);
-  if (snap) { camera.position.copy(eye); cameraAim.copy(target); }
+  const composition = preview && !portrait ? (coast ? -2.8 : -4.4) : (coast ? 1.75 : 0.0);
+  const aimX = THREE.MathUtils.lerp(center.x + (forward.x - center.x) * lookAhead, front.x, 0.65)
+    + offset * 0.72 + composition * cos;
+  const aimZ = -s - lookAhead + composition * sin;
+  // On steep descents the camera retains a visible horizon and the distant cliff skyline.
+  const pitch = clamp((coast ? 0.115 : 0.145) - slope * 0.17, 0.08, coast ? 0.17 : 0.22);
+  target.set(aimX, eye.y - Math.hypot(aimX - eye.x, aimZ - eye.z) * Math.tan(pitch), aimZ);
+  const curve = (road(s + 8).x - 2 * center.x + road(s - 8).x) / 64;
+  const bank = preview || reducedMotion.matches ? 0 : clamp(lean * 0.035 + curve * speed * 0.18, -0.068, 0.068);
+  const baseFov = portrait ? 68 : coast ? 61 : 57;
+  const fov = baseFov + (preview || reducedMotion.matches ? 0 : clamp((speed - 15) * 0.20, 0, 4.5));
+  if (snap) { camera.position.copy(eye); cameraAim.copy(target); cameraBank = bank; }
   else {
-    const alpha = -Math.expm1(-12 * dt);
-    camera.position.lerp(eye, alpha);
-    cameraAim.lerp(target, alpha);
+    camera.position.lerp(eye, -Math.expm1(-15 * dt));
+    cameraAim.lerp(target, -Math.expm1(-10 * dt));
+    cameraBank = damp(cameraBank, bank, 4, dt);
+  }
+  const nextFov = snap ? fov : damp(camera.fov, fov, 3, dt);
+  if (Math.abs(camera.fov - nextFov) > 0.003) {
+    camera.fov = nextFov;
+    camera.updateProjectionMatrix();
   }
   camera.lookAt(cameraAim);
+  camera.rotateZ(cameraBank);
   gates.update(s);
   environment.update(s);
+  scenes.get(route).sunlight.follow(s);
 }
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -291,6 +344,16 @@ function init() {
     get('start').textContent = '需要 WebGL 2 · 请开启硬件加速';
     return;
   }
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1.12;
+  // A newly loaded map may complete while the menu or pause screen is stationary.
+  THREE.DefaultLoadingManager.onLoad = () => {
+    for (const entry of scenes.values()) entry.sunlight.reset();
+    if (scene) scenes.get(route).sunlight.follow(mode === 'menu' ? 7 : distance);
+    refreshPreview();
+  };
   resize();
   selectScene();
   bindControls();
