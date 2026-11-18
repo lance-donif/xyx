@@ -42,6 +42,7 @@ const camera = new THREE.PerspectiveCamera(56, 1, 0.09, 365);
 const cameraAim = new THREE.Vector3(), target = new THREE.Vector3(), eye = new THREE.Vector3();
 let distance = startLine, speed = 0, offset = 0, lateralSpeed = 0, lean = 0;
 let elapsed = 0, passed = 0, nextGate = 0, noticeFor = 0;
+const lastAnchor = new THREE.Vector3(), anchor = new THREE.Vector3(), pathDelta = new THREE.Vector3();
 let cameraBank = 0;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let last = 0, worldTime = 0, uiTime = 0, resolution = 1.5, slowSeconds = 0;
@@ -173,7 +174,9 @@ function step(dt, clockDelta) {
   lateralSpeed = damp(lateralSpeed, steer * (4.3 + speed * 0.045) - slip - correction, 5.8, dt);
   const oldOffset = offset;
   offset = clamp(offset + lateralSpeed * dt, -4.25, 4.25);
-  lean = damp(lean, clamp(steer * 0.9 - curvature * speed * 0.75, -1, 1), 5, dt);
+  const roadCurve = curvature / Math.pow(1 + ((far.x - near.x) / 6) ** 2, 1.5);
+  const cornerLean = Math.atan2(speed * speed * roadCurve, 9.81);
+  lean = damp(lean, clamp(steer * 0.75 + cornerLean * 1.35, -1, 1), 5, dt);
   const oldDistance = distance;
   const travel = speed * dt / Math.hypot(1, (far.x - near.x) / 6, (far.y - near.y) / 6);
   distance = Math.min(COURSE_LENGTH, distance + travel);
@@ -211,33 +214,40 @@ function setView(dt, snap = false) {
   const portrait = camera.aspect < 0.8;
   const coast = route === 'coast';
   const biking = vehicle === 'cycle';
-  const camDist = preview ? (portrait ? 6.8 : 6.2) : (biking ? 4.55 : 4.85);
+  const camDist = preview ? (portrait ? 6.25 : 5.65) : (coast && biking ? 3.95 : biking ? 4.35 : 4.9);
   // Start over the outside shoulder on the coast, looking across the trail toward the bay.
   // In a corner, the rider moves across the frame before the chase camera catches up.
   const side = preview ? (portrait ? -0.65 : coast ? -2 : 1.1)
     : (coast ? -0.85 : 0.10) - lean * 0.64;
-  const height = preview ? (coast ? 3.05 : 3.3) : (coast ? 2.67 : 2.45);
+  const height = preview ? (coast ? 2.9 : 3.15) : (coast ? 1.94 : 2.52);
   eye.set(center.x + offset * 0.70 - sin * camDist + cos * side,
-    center.y - slope * camDist * (coast ? 0.56 : 0.72) + height + bob * 0.35, -s + cos * camDist + sin * side);
+    center.y - slope * camDist * (coast ? 0.27 : 0.72) + height + bob * 0.35, -s + cos * camDist + sin * side);
+  eye.y = Math.max(eye.y, road(-eye.z).y + 0.95);
   const lookAhead = preview ? 17 : 13 + speed * 0.12;
   const front = road(s + lookAhead);
   const composition = preview && !portrait ? (coast ? -2.8 : -4.4) : (coast ? 1.75 : 0.0);
   const aimX = THREE.MathUtils.lerp(center.x + (forward.x - center.x) * lookAhead, front.x, 0.65)
     + offset * 0.72 + composition * cos;
   const aimZ = -s - lookAhead + composition * sin;
-  // On steep descents the camera retains a visible horizon and the distant cliff skyline.
-  const pitch = clamp((coast ? 0.115 : 0.145) - slope * 0.17, 0.08, coast ? 0.17 : 0.22);
+  // Frame the torso below centre so both tyres and the skyline survive a change in grade.
+  const baseFov = portrait ? 63 : coast ? 52 : 54;
+  const framing = preview ? (portrait ? 0.44 : 0.71) : 0.68;
+  const subjectAngle = Math.atan2(eye.y - center.y - 0.88, Math.hypot(eye.x - center.x - offset, eye.z + s));
+  const pitch = clamp(subjectAngle - Math.atan((framing * 2 - 1) * Math.tan(baseFov * Math.PI / 360)), 0.04, coast && !preview ? 0.19 : 0.43);
   target.set(aimX, eye.y - Math.hypot(aimX - eye.x, aimZ - eye.z) * Math.tan(pitch), aimZ);
   const curve = (road(s + 8).x - 2 * center.x + road(s - 8).x) / 64;
-  const bank = preview || reducedMotion.matches ? 0 : clamp(lean * 0.035 + curve * speed * 0.18, -0.068, 0.068);
-  const baseFov = portrait ? 68 : coast ? 61 : 57;
+  const bank = preview || reducedMotion.matches ? 0 : clamp(lean * 0.072 + curve * speed * 0.12, -0.10, 0.10);
+  anchor.set(center.x, center.y, -s);
   const fov = baseFov + (preview || reducedMotion.matches ? 0 : clamp((speed - 15) * 0.20, 0, 4.5));
   if (snap) { camera.position.copy(eye); cameraAim.copy(target); cameraBank = bank; }
   else {
-    camera.position.lerp(eye, -Math.expm1(-15 * dt));
-    cameraAim.lerp(target, -Math.expm1(-10 * dt));
+    // Smooth steering in the moving road frame. Speed must not pull the chase camera away.
+    pathDelta.subVectors(anchor, lastAnchor);
+    camera.position.add(pathDelta).lerp(eye, -Math.expm1(-12 * dt));
+    cameraAim.add(pathDelta).lerp(target, -Math.expm1(-9 * dt));
     cameraBank = damp(cameraBank, bank, 4, dt);
   }
+  lastAnchor.copy(anchor);
   const nextFov = snap ? fov : damp(camera.fov, fov, 3, dt);
   if (Math.abs(camera.fov - nextFov) > 0.003) {
     camera.fov = nextFov;
@@ -279,7 +289,6 @@ function frame(now) {
     }
   }
   setView(dt);
-  renderer.render(scene, camera);
   // Keep text sharp, reducing only the WebGL buffer when frames repeatedly overrun.
   slowSeconds = delta > 0.038 ? slowSeconds + Math.min(delta, 0.3) : Math.max(0, slowSeconds - 2 * delta);
   if (slowSeconds > 0.8 && renderer.getPixelRatio() > 0.5) {
@@ -287,13 +296,16 @@ function frame(now) {
     renderer.setPixelRatio(resolution);
     slowSeconds = 0;
   }
+  renderer.render(scene, camera);
 }
 function bindControls() {
   document.querySelectorAll('[data-route]').forEach(b => b.onclick = () => {
+    if (route === b.dataset.route) return;
     route = b.dataset.route;
     selectScene();
   });
   document.querySelectorAll('[data-vehicle]').forEach(b => b.onclick = () => {
+    if (vehicle === b.dataset.vehicle) return;
     vehicle = b.dataset.vehicle;
     selectScene();
   });
