@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { terrainMap, createFoliageBatch } from './nature.js'
 import { mountSky } from './sky.js'
 import { addMarineSky, marineLight, mistOnHorizon } from './coast-sky.js'
+import { addPortStreet, onPortStreet } from './coast-village.js'
 import { makeHarbour, reflectedShore } from './coast-shore.js'
 
 const COURSE = 1200
@@ -31,7 +32,7 @@ export function coastAt(s) {
   const turn=(s-155)/44
   return {
     x: 52*sin((s+18)/56)+13*sin((s+5)/31)+20*sin(s/140)+.84*(s-155)*exp(-turn*turn),
-    y: 100-0.055*s + 13*cos((s+24)/57) + 7*cos((s+25)/107) - 3*sin(s/44) - 9*smooth(s,16,82) - 295*smooth(s,1250,1480),
+    y: 100-0.055*s + 13*cos((s+24)/57) + 7*cos((s+25)/107) - 3*sin(s/44) - 9*smooth(s,16,82) - 8*smooth(s,701,763) + 8*smooth(s,809,918) - 295*smooth(s,1250,1480),
   }
 }
 
@@ -39,7 +40,7 @@ function rim(s) { return 9.4 + 1.5 * sin(s/24) + 0.8 * sin(s/8) }
 function beach(s) { return 58 + 12*sin(s/47) + 6*sin(s/16) + 1.5*sin(s/4.5) }
 
 // The full four metres either side of centre are rideable. Only the worn tread is bare earth.
-function hill(s,d) {
+function naturalHill(s,d) {
   const {y} = coastAt(s)
   const hd = abs(d)
   const turbulence = 2*grain(s*.105,d*.103)-1
@@ -57,6 +58,13 @@ function hill(s,d) {
   const t = min(1,(d-e)/(b-e))
   return capY+(WATER-1.8-capY)*pow(t,.77) +
     .65*turbulence*(1-t) + sin(Math.PI*t)*(4.5*turbulence+1.5*sin(s*.47+d*.63))
+}
+
+function hill(s,d) {
+  const terrain=naturalHill(s,d)
+  if (!onPortStreet(s,d)) return terrain
+  const terrace=smooth(s,692,701)*(1-smooth(s,795,803))*(1-smooth(abs(d),9,17))
+  return THREE.MathUtils.lerp(terrain,coastAt(s).y-.20,terrace)
 }
 
 function farCoast(s) {
@@ -224,7 +232,8 @@ function vegetation(root, instances) {
   const stones=instances.batch(boulder,granite,180,80,true)
   function tree(s,d,h) {
     const x=coastAt(s).x+d,y=hill(s,d),width=h*(.24+.065*rnd())
-    foliage.conifer(x,y-.24,-s,width,h,width*.94,floor(rnd()*61324))
+    const seed=floor(rnd()*61324)
+    if (!onPortStreet(s,d)) foliage.conifer(x,y-.24,-s,width,h,width*.94,seed)
   }
   for(let i=0;i<355;i++) {
     const s=rnd()*(COURSE+290)-90
@@ -239,21 +248,23 @@ function vegetation(root, instances) {
     const s=rnd()*(COURSE+215)-80
     const d = (i%4===0 ? 1 : -1)*(5.3+rnd()*(i%4===0 ? 7 : 19))
     const x=coastAt(s).x+d,y=hill(s,d),w=.47+rnd()*.96
-    foliage.crown(x,y+w*.30,-s,w,.52*w,.82*w,10001+i)
+    if (!onPortStreet(s,d)) foliage.crown(x,y+w*.30,-s,w,.52*w,.82*w,10001+i)
   }
   for(let i=0;i<12500;i++) {
     const s=rnd()*(COURSE+145)-50, side=rnd()<.55?-1:1
     const d=side*(1.8+pow(rnd(),1.5)*(side>0?12:16))
     const x=coastAt(s).x+d,y=hill(s,d)
     const size=.42+rnd()*.95
-    foliage.tuft(x,y-.048,-s,size*(.9+rnd()*.68),size*(.39+.36*rnd()),1370+i)
+    const width=size*(.9+rnd()*.68), height=size*(.39+.36*rnd())
+    if (!onPortStreet(s,d)) foliage.tuft(x,y-.048,-s,width,height,1370+i)
   }
   for(let i=0;i<1900;i++) {
     const s=rnd()*(COURSE+165)-55,side=rnd()<.5?-1:1
     const d=side*(4.8+pow(rnd(),1.12)*22),x=coastAt(s).x+d,y=hill(s,d)
     const size=.10+pow(rnd(),3)*1.75
-    stones.place(x,y-.04-size*.18,-s,size*(1.1+rnd()),size*(.3+.28*rnd()),size*(.8+rnd()*.6),
-      [0x96968e,0x979582,0x828078,0xb5aa95][floor(rnd()*4)],rnd()*Math.PI)
+    const width=size*(1.1+rnd()), height=size*(.3+.28*rnd()), depth=size*(.8+rnd()*.6)
+    const color=[0x96968e,0x979582,0x828078,0xb5aa95][floor(rnd()*4)], yaw=rnd()*Math.PI
+    if (!onPortStreet(s,d)) stones.place(x,y-.04-size*.18,-s,width,height,depth,color,yaw)
   }
   stones.flush();foliage.flush()
   for(const child of root.children) {
@@ -397,6 +408,7 @@ export function createCoast(scene) {
   const ground=makeGround(root)
   const instances=groupInstances(root)
   const harbour=makeHarbour(root,scene,farCoast,WATER,marine)
+  const street=addPortStreet(root,coastAt)
   const plants=vegetation(root,instances)
   const water=makeWater(root,marine,harbour)
   const spray=breakers(instances)
@@ -408,6 +420,7 @@ export function createCoast(scene) {
       ground(s)
       instances.update(s)
       plants.update(s)
+      street(s)
       const t=performance.now()*.001
       water(t)
       harbour.update(t)
