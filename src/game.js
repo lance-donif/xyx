@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { roadAt, createWorld } from './world.js';
+import { roadAt, createWorld, alpineLaneScale } from './world.js';
 import { coastAt, createCoast } from './coast.js';
 import { createRider } from './rider.js';
 import { createDusk, duskAt, duskLaneScale } from './dusk.js';
@@ -10,7 +10,7 @@ import { trackSunlight } from './sunshadow.js';
 
 const get = id => document.getElementById(id);
 const routes = {
-  alpine: { name: '松冠山道', title: 'ALPINE <br>DESCENT', road: roadAt, create: createWorld },
+  alpine: { name: '松冠山道', title: 'ALPINE <br>DESCENT', road: roadAt, laneScale: alpineLaneScale, create: createWorld },
   dusk: { name: '松冠山道 · 暮色山城', title: 'EMBER <br>DESCENT', road: duskAt, laneScale: duskLaneScale, create: createDusk },
   coast: { name: '翡翠海岸', title: 'COASTAL <br>SPRINT', road: coastAt, create: createCoast }
 };

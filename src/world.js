@@ -10,6 +10,14 @@ const TAU = Math.PI * 2
 const { sin, cos, abs } = Math
 const smooth = (a, b, t) => THREE.MathUtils.smoothstep(t, a, b)
 
+// Scale lateral riding limits and gate offsets with the paved width.
+// The hamlets use their original broad streets; the two elevated causeways are single-lane.
+export function alpineLaneScale(s) {
+  const firstRidge = 1 - smooth(245, 365, s)
+  const secondRidge = smooth(660, 755, s) * (1 - smooth(960, 1060, s))
+  return 1 - .47 * Math.max(firstRidge, secondRidge)
+}
+
 export function roadAt(s) {
   return {
     x: 12 * sin(s / 67 + .3) + 15 * sin(s / 109 - .58) + 4.7 * sin(s / 31 - .6),
@@ -27,11 +35,13 @@ function ridgeDepth(s) {
 function groundAt(x, s) {
   const r = roadAt(s)
   const lateral = x - r.x
-  const d = Math.max(0, abs(lateral) - 5.05)
+  const width = alpineLaneScale(s)
+  const shoulder = 3.96*width + .72
+  const d = Math.max(0, abs(lateral) - shoulder)
   const envelope = 1 - Math.exp(-Math.pow(d / (10.5 + 2.3 * sin(s / 45)), 1.5))
   const undulation = sin(x * .033 + s * .019) * 1.8 + cos(s * .027 - x * .017) * 1.4
   const valleySide = smooth(78, 235, d) * (11 + 9 * sin(s * .011 + lateral * .014))
-  return r.y - .09 + .18*Math.exp(-((abs(lateral)-5.32)**2)/.67) - ridgeDepth(s) * envelope + undulation * smooth(12, 44, d) + valleySide
+  return r.y - .09 + .18*Math.exp(-((abs(lateral)-shoulder-.16)**2)/.67) - ridgeDepth(s) * envelope + undulation * smooth(12, 44, d) + valleySide
 }
 
 function random(seed) {
@@ -55,7 +65,8 @@ function makeRoad(scene, shadows) {
   const points = [], uvs = [], indices = [], colors = []
   function strip(s, a, b, tone, lift = 0) {
     const p = roadAt(s), q = roadAt(s + 2), first = points.length / 3
-    points.push(p.x+a,p.y+lift,-s,p.x+b,p.y+lift,-s,q.x+b,q.y+lift,-s-2,q.x+a,q.y+lift,-s-2)
+    const w = alpineLaneScale(s), v = alpineLaneScale(s+2)
+    points.push(p.x+a*w,p.y+lift,-s,p.x+b*w,p.y+lift,-s,q.x+b*v,q.y+lift,-s-2,q.x+a*v,q.y+lift,-s-2)
     uvs.push(a/3,s/3,b/3,s/3,b/3,(s+2)/3,a/3,(s+2)/3)
     const c = new THREE.Color(tone)
     for (let i = 0; i < 4; i++) colors.push(c.r,c.g,c.b)
@@ -82,7 +93,9 @@ function makeTerrain(scene, shadows) {
   const moss=new THREE.Color('#fff9aa'), stone=new THREE.Color('#dbcaa2')
   for (let s=FIRST-6, row=0; s<=LAST+9; s+=3,row++) {
     for (let j=0; j<offsets.length; j++) {
-      const d=offsets[j], x=roadAt(s).x+d, y=groundAt(x,s)
+      const offset=offsets[j]
+      const d=offset * THREE.MathUtils.lerp(alpineLaneScale(s),1,smooth(4.2,19,abs(offset)))
+      const x=roadAt(s).x+d, y=groundAt(x,s)
       points.push(x,y,-s)
       uv.push((x+y*.28)/3.3,(s+y*.22)/3.3)
       const field=Math.floor((x+310+sin(s/72)*4)/26)+Math.floor((s+92+cos(x/70)*5)/42)*3
@@ -223,36 +236,51 @@ function makeWood(scene) {
 
 function makeOakAvenue(scene, leaves, shade) {
   const rng=random(64112),wood=makeWood(scene)
-  function crown(p,rx,ry,rz) {
-    leaves.crown(p[0],p[1],p[2],rx,ry,rz,Math.floor(rng()*1e6))
-  }
-  function oak(side,s,reach,canopyHeight) {
+  function oak(side,s,reach,canopyHeight,scaleX,scaleY,scaleZ) {
     const road=roadAt(s)
-    const x=road.x+side*reach,z=-s,base=groundAt(x,s)
+    const toWorld=([x,y,z])=>[road.x+(x-road.x)*scaleX,road.y+(y-road.y)*scaleY,-s+(z+s)*scaleZ]
+    const floor=(x,along)=>{
+      const worldX=road.x+(x-road.x)*scaleX, worldS=s+(along-s)*scaleZ
+      return road.y+(groundAt(worldX,worldS)-road.y)/scaleY
+    }
+    function crown(p,rx,ry,rz) {
+      leaves.crown(...toWorld(p),rx*scaleX,ry*scaleY,rz*scaleZ,Math.floor(rng()*1e6))
+    }
+    function limb(path,radii,moss,rootSide=0) {
+      wood.limb(path.map(toWorld),radii.map(r=>r*Math.sqrt(scaleX*scaleY)),moss,rootSide)
+    }
+    const x=road.x+side*reach,z=-s,base=floor(x,s)
     const h=road.y-base+canopyHeight
     const twist=(rng()-.5)*9
     const girth=3.3+h*.070
     const root=[x,base-.9,z], waist=[x+side*1.8,base+h*.30,z+twist]
     const mid=[x-side*1.1,base+h*.55,z+twist*.65]
     const fork=[x-side*5.4,base+h*.71,z-1.8]
-    wood.limb([root,[x+side*1.4,base+h*.09,z+.4],waist,mid,fork],
+    limb([root,[x+side*1.4,base+h*.09,z+.4],waist,mid,fork],
       [girth*1.46,girth*1.06,girth*.76,girth*.65,girth*.51],.65)
     // Buttresses follow the valley floor, with a carved central fluting down the bole.
     for(let i=0;i<12;i++) {
-      const a=TAU*i/12+rng()*.15, r=girth*(2.2+rng()*1.2)
+      const a=TAU*i/12+rng()*.21, r=girth*(1.36+rng()*.72)
       const dx=sin(a), ds=cos(a), endS=s+ds*r,bendS=s+ds*r*.63
       const keepOffShoulder=(xx,ss)=>roadAt(ss).x+side*Math.max(7.0,(xx-roadAt(ss).x)*side)
       const endX=keepOffShoulder(x+dx*r,endS),bendX=keepOffShoulder(x+dx*r*.63,bendS)
-      const start=[x+dx*girth*.61,base+(girth*(2+rng()*1.7)),z-ds*girth*.61]
-      const bend=[bendX,groundAt(bendX,bendS)+girth*.37,-bendS]
-      wood.limb([start,[x+dx*girth*.86,base+girth*.70,z-ds*girth*.86],bend,[endX,groundAt(endX,endS)-.23,-endS]],
-        [girth*.32,girth*.48,girth*.27,.19],.95,side)
+      const join=girth*(1.8+rng()*.53)
+      const t=Math.min(.96,join/(h*.30))
+      const start=[THREE.MathUtils.lerp(root[0],waist[0],t)+dx*girth*.14,
+        base+join,THREE.MathUtils.lerp(root[2],waist[2],t)-ds*girth*.14]
+      const bend=[bendX,floor(bendX,bendS)-girth*.12,-bendS]
+      limb([start,[x+dx*girth*.86,base+girth*.70,z-ds*girth*.86],bend,[endX,floor(endX,endS)-girth*.73,-endS]],
+        [girth*.17,girth*.36,girth*.18,.12],.95,side)
+      if(i%2===0){
+        crown([bendX,floor(bendX,bendS)+.65,-bendS],2.3+rng()*1.2,1.4+rng()*.8,2.4)
+      }
     }
     // The two road-facing boughs form a vault above the rider, with irregular splits and tips.
-    const crossing=[road.x+side*11,road.y+canopyHeight*.50,z+twist-1]
-    const span=[road.x+side*2,road.y+canopyHeight*.60,z-5]
-    const far=[road.x-side*7.6,road.y+canopyHeight*.70,z-8.2]
-    wood.limb([mid,[x-side*reach*.32,road.y+canopyHeight*.35,z+twist*.5],crossing,span,far],
+    const oldGrowth=scaleX>1.7
+    const crossing=[road.x+side*(oldGrowth?reach*.75:11),road.y+canopyHeight*.51,z+twist-1]
+    const span=[road.x+side*(oldGrowth?reach*.57:2),road.y+canopyHeight*.64,z-5]
+    const far=[road.x+side*(oldGrowth?reach*.34:-7.6),road.y+canopyHeight*.75,z-8.2]
+    limb([mid,[x-side*reach*.32,road.y+canopyHeight*.35,z+twist*.5],crossing,span,far],
       [girth*.62,girth*.51,girth*.33,girth*.19,.55],.45)
     crown(far,9.8,5.1,8)
     for(let j=1;j<=3;j++){
@@ -266,14 +294,14 @@ function makeOakAvenue(scene, leaves, shade) {
       const end=[fork[0]+sin(a+.10)*d,base+h*(.92+rng()*.07),fork[2]+cos(a+.10)*d]
       const t0=.40+(k%3)*.24
       const split=mid.map((v,i)=>THREE.MathUtils.lerp(v,fork[i],t0))
-      wood.limb([split,[elbow[0]+cos(a)*2.1,elbow[1]-1.6,elbow[2]-sin(a)*2.1],elbow,end],[girth*.32,girth*.235,girth*.18,.36],.32)
+      limb([split,[elbow[0]+cos(a)*2.1,elbow[1]-1.6,elbow[2]-sin(a)*2.1],elbow,end],[girth*.32,girth*.235,girth*.18,.36],.32)
       const c=end.map((v,i)=>THREE.MathUtils.lerp(v,elbow[i],.34))
       crown(c,8.2+rng()*2.5,4.1+rng()*1.9,7.5+rng()*2.5)
       crown([elbow[0]+sin(a)*2,elbow[1]+1.6,elbow[2]+cos(a)*2],6.6,3.8,5.8)
       for(let twig=0;twig<3;twig++){
         const t=a+(twig-1)*.77
         const tip=[end[0]+sin(t)*(4+rng()*6),end[1]+3+rng()*5,end[2]+cos(t)*(4+rng()*6)]
-        wood.limb([end,[(end[0]+tip[0])*.5,(end[1]+tip[1])*.5-1,(end[2]+tip[2])*.5],tip],
+        limb([end,[(end[0]+tip[0])*.5,(end[1]+tip[1])*.5-1,(end[2]+tip[2])*.5],tip],
           [1.05,.66,.15],.15)
         crown(tip,7.4+rng()*4.4,4.4+rng()*2.8,7.4+rng()*3.6)
       }
@@ -289,16 +317,31 @@ function makeOakAvenue(scene, leaves, shade) {
         THREE.MathUtils.lerp(waist[1],fork[1],t),THREE.MathUtils.lerp(waist[2],fork[2],t)+cos(a)*r]
       crown(pos,1.7+rng()*1.7,2.3+rng()*2.8,1.6+rng()*1.3)
     }
-    shade.ellipse(x-girth*.5,s-girth*.3,girth*2.7,girth*2.1,.83)
+    shade.ellipse(road.x+(x-road.x-girth*.5)*scaleX,s-girth*.3*scaleZ,
+      girth*2.7*scaleX,girth*2.1*scaleZ,.83)
     // Sun comes from the front right. The broad crowns break up into pools of shade and light.
     const castX=side>0?road.x-3:road.x-reach*.9
     for(let i=0;i<14;i++) {
-      shade.ellipse(castX+(rng()-.5)*19,s-6+(rng()-.5)*22,3+rng()*6,3+rng()*5,.48+rng()*.29,-.46)
+      shade.ellipse(castX+(rng()-.5)*19*scaleX,s+(-6+(rng()-.5)*22)*scaleZ,
+        (3+rng()*6)*scaleX,(3+rng()*5)*scaleZ,.43+rng()*.29,-.46)
     }
   }
-  for(const s of [26,96,174,244,322,754,835,911,992]){
-    oak(-1,s-4,22+rng()*9,21+rng()*7)
-    oak(1,s+8+rng()*7,21+rng()*11,20+rng()*9)
+  // Close boughs frame the ridge. Beyond them the valley opens out under much older,
+  // wider trees. Their roots are comparable in size to whole blocks of the village.
+  const groves=[
+    // distance, radial scale, height scale, depth scale, root offset, crown clearance
+    [32,.70,.78,.9,20,21], [78,1.04,1.12,1.12,23,23],
+    [151,2.76,3.04,1.94,26,27], [222,3.45,3.32,2.34,27,29],
+    [298,3.08,2.8,2.06,25,27], [366,2.78,2.68,1.99,26,26],
+    [754,.88,.9,.95,23,22], [826,1.46,1.6,1.4,25,26],
+    [916,3.0,3.0,2.1,27,27], [1000,2.08,2.32,1.7,26,26],
+  ]
+  // Above the open valley, the nearest veteran oaks stand on alternating ridges.
+  // The painted forest continues the avenue beyond the visible valley floor.
+  for(const [i,[s,sx,sy,sz,offset,height]] of groves.entries()){
+    const valleyOffset=offset+(sx>1.7?23:0)
+    if(sx<1.7 || i%2===0) oak(-1,s-5*sz,valleyOffset+rng()*2,height+rng()*3,sx,sy,sz)
+    if(sx<1.7 || i%2!==0) oak(1,s+(6+rng()*4)*sz,valleyOffset+1+rng()*2,height-2+rng()*3,sx,sy,sz)
   }
   return wood.finish()
 }
@@ -382,12 +425,29 @@ function makeLandmarks(scene,leaves,shade) {
       }
     }
   }
+  // These groves rise from the banks in front of the distant forest, tying its
+  // painted foothills to the roofs and live geometry in the valley.
+  for(const [from,to] of [[83,343],[737,1028]]){
+    for(let s=from; s<to; s+=8.5){
+      for(const side of [-1,1]){
+        const belt=16+19*(.5+.5*sin(s*.037+side))
+        for(let j=0;j<8;j++){
+          const along=s+rng()*8, x=roadAt(along).x+side*(belt+rng()*16)
+          const h=2.2+rng()*(j%4===0?9:4),y=groundAt(x,along)
+          if(j%3===0)leaves.conifer(x,y-.2,-along,h*.32,h,h*.30,rngSeed())
+          else leaves.crown(x,y+h*.44,-along,h*.57,h*.43,h*.56,rngSeed())
+          shade.ellipse(x-h*.35,along-h*.24,h*.49,h*.51,.60,-.7)
+        }
+      }
+    }
+  }
   // A grass fringe replaces rails on the high causeway so the drop stays visible.
   for(let i=0;i<6400;i++){
-    const s=FIRST+rng()*(LAST-FIRST),side=rng()<.5?-1:1, x=roadAt(s).x+side*(4.32+rng()**1.9*6)
+    const s=FIRST+rng()*(LAST-FIRST),side=rng()<.5?-1:1, x=roadAt(s).x+side*(3.96*alpineLaneScale(s)+.65+rng()**1.9*6)
     if(s>=397 && s<=661 || s>=1050 && s<=1210) continue
     const h=.30+rng()*.72
-    if(i%2===0) leaves.tuft(x,groundAt(x,s)-.05,-s,.9+rng()*1.65,.33+rng()*.52,rngSeed())
+    const room=2*(abs(x-roadAt(s).x)-3.96*alpineLaneScale(s)-.13)
+    if(i%2===0) leaves.tuft(x,groundAt(x,s)-.05,-s,Math.min(room,.9+rng()*1.65),.33+rng()*.52,rngSeed())
     add('grass',x,groundAt(x,s)-.04,-s,.65+rng()*.8,h,.66+rng()*.8,'#dee5b7',rng()*TAU)
     if(i%29===0){
       const d=.22+rng()*.71
@@ -417,7 +477,7 @@ function makeLandmarks(scene,leaves,shade) {
     }
   }
   // An oblique viaduct runs along the side valley behind the steeples, without closing the vanishing point.
-  aqueduct(roadAt(115).x-90,108,.98,8.5,13)
+  aqueduct(roadAt(115).x-94,108,1.61,5.2,13)
   aqueduct(roadAt(450).x-66,390,1.48,16,15)
   aqueduct(roadAt(935).x+67,812,1.72,15,15)
   for(const {key,area,list} of batches.values()) {
@@ -466,6 +526,82 @@ function distantAlps(scene){
   }
 }
 
+// The high forest extends into a painted aerial perspective. Keep the luminous
+// opening aligned with the distant road, while the playable trees, rider and gates
+// retain their own depth and parallax in front of the painting.
+function elderwoodVista(scene) {
+  const image=new THREE.TextureLoader().load(new URL('./art/elderwood-vista.webp',import.meta.url).href)
+  image.colorSpace=THREE.SRGBColorSpace
+  const width=260,height=width*793/1983,depth=119
+  const mat=new THREE.ShaderMaterial({
+    uniforms:{viewMap:{value:image},amount:{value:0}},
+    transparent:true,side:THREE.DoubleSide,depthWrite:false,toneMapped:false,
+    vertexShader:`varying vec2 st;
+      void main(){st=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+    fragmentShader:`varying vec2 st;uniform sampler2D viewMap;uniform float amount;
+      void main(){
+        vec3 col=texture2D(viewMap,st).rgb;
+        // Preserve the golden leaf rims while cooling the succession of shadowed arches.
+        float lum=dot(col,vec3(.2126,.7152,.0722));
+        float under=(1.-smoothstep(.10,.46,lum))*smoothstep(.12,.40,st.y);
+        col=mix(col,col*vec3(.54,.66,1.10)+vec3(.002,.004,.014),under*.78);
+        float sides=smoothstep(0.,.13,min(st.x,1.-st.x));
+        float lower=smoothstep(.035,.22,st.y);
+        float top=1.-smoothstep(.87,1.,st.y);
+        float lane=exp(-pow((st.x-.5)*28.,2.))*(1.-smoothstep(.18,.26,st.y));
+        gl_FragColor=vec4(col,amount*sides*lower*top*(1.-.91*lane));
+        #include <colorspace_fragment>
+      }`,
+  })
+  const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),mat)
+  panel.renderOrder=0
+  scene.add(panel)
+  let day=true,current=0
+  function update(s){
+    current=s
+    const first=1-smooth(240,343,s)
+    const second=smooth(670,741,s)*(1-smooth(947,1032,s))
+    const road=roadAt(s+depth)
+    const approach=1+.17*(s<600?smooth(55,306,s):smooth(735,960,s))
+    panel.scale.set(approach,approach,1)
+    panel.position.set(road.x,road.y+height*.27*approach+1,-s-depth)
+    mat.uniforms.amount.value=day?Math.max(first,second):0
+    panel.visible=mat.uniforms.amount.value>.001
+  }
+  return {update,setTheme(mode){day=mode!=='dusk';update(current)}}
+}
+
+// In the deepest arches, direct sunlight catches the upper sprays while the
+// undersides receive mostly blue skylight. Distance compresses them into a silhouette.
+function shadeForest(group) {
+  const day = {value:1}, seen = new Set()
+  group.traverse(object=>{
+    const material=object.material
+    if(!material || seen.has(material)) return
+    seen.add(material)
+    const leaves=object.name==='Foliage · crown'
+    const prepare=material.onBeforeCompile.bind(material)
+    material.onBeforeCompile=shader=>{
+      prepare(shader)
+      shader.uniforms.forestDay=day
+      shader.fragmentShader=shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float forestDay;')
+        .replace('#include <opaque_fragment>',`
+          ${leaves ? `float rim=smoothstep(.42,.91,vMapUv.y);
+          outgoingLight*=mix(vec3(1.),mix(vec3(.22,.34,.61),vec3(1.25,1.21,.89),rim),forestDay);` : ''}
+          #include <opaque_fragment>`)
+        .replace('#include <fog_fragment>',`#include <fog_fragment>
+        #ifdef USE_FOG
+          float air=smoothstep(30.,155.,vFogDepth)*forestDay;
+          float distant=smoothstep(210.,387.,vFogDepth);
+          vec3 skyline=mix(vec3(.070,.18,.41),vec3(.30,.54,.93),distant);
+          gl_FragColor.rgb=mix(gl_FragColor.rgb,skyline,air*.81);
+        #endif`)
+    }
+    material.customProgramCacheKey=()=>leaves?'alpine-crown-light':'alpine-wood-light'
+  })
+  return mode=>{day.value=mode==='dusk'?0:1}
+}
+
 export function createWorld(scene) {
   const sky=mountSky(scene,'alpine'), hills=distantAlps(scene)
   const hemi=new THREE.HemisphereLight('#c3d6fc','#9aa847',1.1)
@@ -476,16 +612,22 @@ export function createWorld(scene) {
   const shade=groundShadows(),leaves=createFoliageBatch(scene)
   makeTerrain(scene,shade)
   makeRoad(scene,shade)
-  const updateWood=makeOakAvenue(scene,leaves,shade)
+  const grove=new THREE.Group()
+  scene.add(grove)
+  const crowns=createFoliageBatch(grove)
+  const updateWood=makeOakAvenue(grove,crowns,shade)
+  crowns.flush()
+  const forestTheme=shadeForest(grove)
+  const vista=elderwoodVista(scene)
   const updateObjects=makeLandmarks(scene,leaves,shade)
   leaves.flush()
   const village=buildVillage(scene,roadAt,groundAt,shade)
   return {
     length:LENGTH,
-    update(s){hills.update(s);updateWood(s);updateObjects(s);leaves.update(s);village.update(s)},
+    update(s){hills.update(s);updateWood(s);crowns.update(s);vista.update(s);updateObjects(s);leaves.update(s);village.update(s)},
     setTheme(mode){
       const dusk=mode==='dusk'
-      sky.setTheme(mode);hills.setTheme(mode);village.setTheme(mode)
+      sky.setTheme(mode);hills.setTheme(mode);village.setTheme(mode);forestTheme(mode);vista.setTheme(mode)
       hemi.color.set(dusk?'#c4addf':'#c3d6fc')
       hemi.groundColor.set(dusk?'#977046':'#9aa847')
       hemi.intensity=dusk?.89:1.1

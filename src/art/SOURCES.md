@@ -14,4 +14,6 @@
 | meadow-tuft.webp | [ambientCG Foliage 001](https://ambientcg.com/a/Foliage001)，组合并着色为一簇草 |
 | alpine-ridgeline.webp | [Poly Haven Alps Field](https://polyhaven.com/a/alps_field)，从 4K 全景沿实拍山脊抠出远景，加入空气透视 |
 
+elderwood-vista.webp 为本项目使用图像生成工具创作的巨木山谷远景，游戏将绘景与可骑行的三维山脊叠合。
+
 [ambientCG 许可](https://docs.ambientcg.com/license/) · [Poly Haven 许可](https://polyhaven.com/license) · [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
