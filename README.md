@@ -8,7 +8,7 @@
 | --- | --- |
 | [松冠山道 · 摩托车](https://lance-donif.github.io/xyx/?route=alpine&vehicle=moto) | 在巨树间的窄脊俯瞰山村，驶过树荫和谷地石拱桥。 |
 | [暮色山城 · 自行车](https://lance-donif.github.io/xyx/?route=alpine&vehicle=cycle) | 从坡顶望见夕阳下的灯城，沿土路转入半木结构房屋和摊棚之间。 |
-| [翡翠海岸 · 自行车](https://lance-donif.github.io/xyx/?route=coast&vehicle=cycle) | 沿向海的崖壁下降，越过弯道看对岸的港城和高架拱桥。海岸也可选择摩托车。 |
+| [翡翠海岸 · 自行车](https://lance-donif.github.io/xyx/?route=coast&vehicle=cycle) | 沿崖壁下降，看对岸的港城和高架拱桥。到 0.70–0.80 公里，石板街从两排日光木屋之间通向海湾。海岸也可选择摩托车。 |
 
 [查看首版与本轮实玩的同里程画面对照](docs/visual-update.webp)
 
