@@ -56,10 +56,22 @@ function surface(scene) {
   const dirt=terrainMap('dirt'), grass=terrainMap('grass')
   const trail=new THREE.MeshLambertMaterial({map:dirt,vertexColors:true})
   trail.onBeforeCompile=shader=>{
-    shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`
-      vec3 mineral=texture2D(map,vMapUv).rgb;
-      float fleck=dot(mineral,vec3(.22,.65,.13));
-      diffuseColor.rgb*=mix(vec3(.58,.40,.32),vec3(.95,.76,.60),min(1.,fleck*1.1));`)
+    shader.vertexShader=shader.vertexShader.replace('#include <common>',
+      '#include <common>\nattribute vec2 trailPosition; varying vec2 lane;')
+      .replace('#include <begin_vertex>','#include <begin_vertex>\nlane=trailPosition;')
+    shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
+      '#include <common>\nvarying vec2 lane;')
+      .replace('#include <map_fragment>',`
+        vec3 grain=texture2D(map,vMapUv*1.8).rgb;
+        float mineral=dot(grain,vec3(.23,.60,.17));
+        float patches=texture2D(map,vec2(-vMapUv.y,vMapUv.x)*.32).g;
+        float drift=.13*sin(lane.y*.11)+.11*sin(lane.y*.23)+.06*sin(lane.y*.66);
+        float path=abs(abs(lane.x-drift)-.72);
+        float tread=(1.-smoothstep(.055,.27,path+mineral*.14))*(.42+.58*smoothstep(.035,.28,patches));
+        vec3 soil=mix(vec3(.45,.37,.28),vec3(.82,.71,.58),smoothstep(.025,.40,mineral));
+        soil*=.89+.28*smoothstep(.045,.38,patches);
+        diffuseColor.rgb*=mix(soil,soil*vec3(.78,.80,.85),tread);
+      `)
   }
   const hills=new THREE.MeshLambertMaterial({map:grass,vertexColors:true})
   const tone=new THREE.Color(),stoneTint=new THREE.Color().setRGB(.91,.69,.53)
@@ -68,7 +80,7 @@ function surface(scene) {
   for(let from=-80;from<1440;from+=100) {
     const group=new THREE.Group()
     for(const section of [-1,0,1]) {
-      const positions=[],uv=[],colors=[],indices=[]
+      const positions=[],uv=[],colors=[],indices=[],lane=[]
       const across=section<0?shoulders:section>0?shoulders.map(v=>-v).reverse():[-1,-.76,-.36,0,.36,.76,1]
       for(let i=0;i<=50;i++) {
         const s=from+i*2, {x,y}=duskAt(s), w=roadWidth(s)
@@ -80,7 +92,7 @@ function surface(scene) {
           const m=market(s)
           if(section===0) {
             const track=smooth(abs(p),.76,1)
-            tone.set(0xffd3b0).multiplyScalar(1.04+.08*sin(s*.22+d*.4)-track*.18)
+            tone.set(0xfff0e1).multiplyScalar(1.04+.08*sin(s*.22+d*.4)-track*.18)
           } else {
             tone.setRGB(1.0+grassy*.51,.64+grassy*.32,.36+grassy*.18)
             tone.lerp(stoneTint,m*.52*smooth(abs(d),2.3,4.3))
@@ -88,6 +100,7 @@ function surface(scene) {
             tone.multiplyScalar(1.-.45*hollow)
           }
           positions.push(x+d,h,-s);uv.push((x+d)*.33,s*.33);colors.push(tone.r,tone.g,tone.b)
+          if(section===0) lane.push(d,s)
           if(i&&j) {
             const k=i*across.length+j
             indices.push(k-across.length-1,k-across.length,k,k-across.length-1,k,k-1)
@@ -96,13 +109,22 @@ function surface(scene) {
       }
       const g=new THREE.BufferGeometry()
       for(const [name,arr,size] of [['position',positions,3],['uv',uv,2],['color',colors,3]])g.setAttribute(name,new THREE.Float32BufferAttribute(arr,size))
+      if(section===0) g.setAttribute('trailPosition',new THREE.Float32BufferAttribute(lane,2))
       g.setIndex(indices);g.computeVertexNormals()
       const mesh=new THREE.Mesh(g,section===0?trail:hills)
       mesh.receiveShadow=true;group.add(mesh)
     }
     scene.add(group);groups.push({from,group})
   }
-  return s=>{for(const {from,group} of groups) group.visible=from+100>s-105&&from<s+675}
+  hills.shadowSide=THREE.FrontSide
+  return s=>{
+    for(const {from,group} of groups) {
+      group.visible=from+100>s-105&&from<s+675
+      const near=from+100>s-44&&from<s+90
+      group.children[0].castShadow=near
+      group.children[2].castShadow=near
+    }
+  }
 }
 
 function mapUV(tile,u,v) {
@@ -359,7 +381,7 @@ function orchards(scene) {
     }
     foliage.crown(x-.16,y+h*.84,-s+.19,h*.23,h*.21,h*.22,s*7)
   }
-  tree(39,-6.8,7.6);tree(51,10.8,8.0);tree(102,-7.3,6.8)
+  tree(39,-6.8,7.6);tree(38,8.0,10.0);tree(103,-5.3,8.8)
   for(let i=0;i<138;i++){
     const s=random()*1305-35, d=(i%3===0?1:-1)*(8.1+random()*59)
     if(d>0&&s<112&&abs(d-canal(s))<9)continue
@@ -416,15 +438,19 @@ function water(scene) {
 export function createDusk(scene) {
   scene.background=new THREE.Color(0x915241)
   scene.fog=new THREE.FogExp2(0x83555a,.00265)
-  const sun=new THREE.DirectionalLight(0xffa14d,3.1)
-  sun.position.set(46,38,-122)
-  scene.add(sun,new THREE.HemisphereLight(0xcbbede,0xc2947d,1.06))
+  const sun=new THREE.DirectionalLight(0xffc17a,4.35)
+  sun.position.set(67,24,-121)
+  // With the sun low over the city the shadowed sandstone receives cool sky light.
+  scene.add(sun,new THREE.HemisphereLight(0x7699ef,0x7885a8,1.42))
   const sky=mountSky(scene,'dusk')
   sky.setTheme('dusk')
   mountDuskVista(scene)
   const hills=surface(scene),town=city(scene),trees=orchards(scene),waves=water(scene)
   return {
     length, ready:sky.ready,
-    update(s){hills(s);town(s);trees.update(s);waves()},
+    update(s){
+      sun.shadow.intensity=.97
+      hills(s);town(s);trees.update(s);waves()
+    },
   }
 }
