@@ -1,12 +1,29 @@
-# xyx
-演示视频：
-https://dl.snapcdn.app/get?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJodHRwczovL3ZpZGVvLnR3aW1nLmNvbS9hbXBsaWZ5X3ZpZGVvLzIxMjEzMjI4Njc1NTIwOTYyNTYvdmlkL2F2YzEvMTkyMHgxMDgwLzMxdDI1akNqbnpsTlhnN00ubXA0P3RhZz0yOSIsImZpbGVuYW1lIjoiVHdpdHRlclNhdmVyLk5ldF8zMXQyNWpDam56bE5YZzdNXzEwODBwLm1wNCIsIm5iZiI6MTc5NTAwNTQ1MSwiZXhwIjoxNzk1MDA5MDUxLCJpYXQiOjE3OTUwMDU0NTF9.uhymik8HNyfW_SIG_SmVNkOCToSUbN5IVodJF0MWVG8
+# RIDGELINE · 山脊骑行
 
-https://dl.snapcdn.app/get?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJodHRwczovL3ZpZGVvLnR3aW1nLmNvbS9hbXBsaWZ5X3ZpZGVvLzIxMjI4MTk3NjQxMDQwNzczMTIvdmlkL2F2YzEvMTkyMHgxMDgwL1RORW5TMFRHclZWQzZmT1IubXA0P3RhZz0yOSIsImZpbGVuYW1lIjoiVHdpdHRlclNhdmVyLk5ldF9UTkVuUzBUR3JWVkM2Zk9SXzEwODBwLm1wNCIsIm5iZiI6MTc5NTAwNTU1NCwiZXhwIjoxNzk1MDA5MTU0LCJpYXQiOjE3OTUwMDU1NTR9.ooODnpm6T1AF5Kacyj8xKSywx36oqIhFdLTODk8FMkE
+[开始游戏](https://lance-donif.github.io/xyx/)
 
-https://dl.snapcdn.app/get?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJodHRwczovL3ZpZGVvLnR3aW1nLmNvbS9hbXBsaWZ5X3ZpZGVvLzIxMjI0NTIyNzYwNDA0MDkwODgvdmlkL2F2YzEvMTkyMHgxMDgwL2xwZ3dlaGZjSGxxaWdCcWsubXA0P3RhZz0yOSIsImZpbGVuYW1lIjoiVHdpdHRlclNhdmVyLk5ldF9scGd3ZWhmY0hscWlnQnFrXzEwODBwLm1wNCIsIm5iZiI6MTc5NTAwNTU4NywiZXhwIjoxNzk1MDA5MTg3LCJpYXQiOjE3OTUwMDU1ODd9.dVXND1_-20WiZ-g8QXOWMjgZD1rWDXoq7NVsPAQWKI8
+一款根据下方五段骑行演示改编的 Three.js 下坡计时游戏。松冠山道穿过巨树、石拱桥和山村，翡翠海岸沿海湾崖壁展开。两条赛道均为 1.2 公里，可选摩托车或公路自行车。
 
-https://dl.snapcdn.app/get?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJodHRwczovL3ZpZGVvLnR3aW1nLmNvbS9hbXBsaWZ5X3ZpZGVvLzIxMjIwMzA3NjQ2MzIyMjM3NDQvdmlkL2F2YzEvMTkyMHgxMDgwLzlkWnZyVnRFQWRpdXR1TmQubXA0P3RhZz0yOSIsImZpbGVuYW1lIjoiVHdpdHRlclNhdmVyLk5ldF85ZFp2clZ0RUFkaXV0dU5kXzEwODBwLm1wNCIsIm5iZiI6MTc5NTAwNTYwMiwiZXhwIjoxNzk1MDA5MjAyLCJpYXQiOjE3OTUwMDU2MDJ9.uomuCDoX2hZWDIqLz2qAXjLrIJ3SupfrqXFN3dTx1QM
+骑手会自动前进。对准八道橙色计时门，漏过一道会在冲线时加三秒。成绩按赛道和车型保存在当前浏览器。
 
-https://dl.snapcdn.app/get?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJodHRwczovL3ZpZGVvLnR3aW1nLmNvbS9hbXBsaWZ5X3ZpZGVvLzIxMjE3NDczNzk2NDA3ODY5NDQvdmlkL2F2YzEvMTkyMHgxMDgwLzFXRS1RMGF4TlRYYldJWnkubXA0P3RhZz0yOSIsImZpbGVuYW1lIjoiVHdpdHRlclNhdmVyLk5ldF8xV0UtUTBheE5UWGJXSVp5XzEwODBwLm1wNCIsIm5iZiI6MTc5NTAwNTYxNiwiZXhwIjoxNzk1MDA5MjE2LCJpYXQiOjE3OTUwMDU2MTZ9.deTsKgAhHpIimqXl2iPS0-6biTW0FtGsYVHX8d7DWh8
+| 操作 | 键盘 |
+| --- | --- |
+| 向左、向右 | A / D 或 ← / → |
+| 加速、刹车 | W / S 或 ↑ / ↓ |
+| 暂停、继续 | P 或 Esc |
 
+触屏游玩时按住方向和加减速按钮，可同时操作。需要支持 WebGL 2 的浏览器。
+
+## 本地运行和发布
+
+在项目根目录运行 `python3 -m http.server 8000`，然后打开 `http://localhost:8000/`。页面使用仓库内的 Three.js 模块与字体，无需 CDN。
+
+本仓库的 GitHub Pages 从 `main` 分支根目录发布。开发时也可运行 `npm ci` 和 `npm run dev`。运行 `npm run build` 可生成用于静态托管的 `dist/`，支持部署到项目子路径。
+
+## 原始演示视频
+
+1. [林冠下的摩托车](https://video.twimg.com/amplify_video/2121322867552096256/vid/avc1/1920x1080/31t25jCjnzlNXg7M.mp4?tag=29)
+2. [海崖山地骑行](https://video.twimg.com/amplify_video/2122819764104077312/vid/avc1/1920x1080/TNEnS0TGrVVC6fOR.mp4?tag=29)
+3. [暮色村道下坡](https://video.twimg.com/amplify_video/2122452276040409088/vid/avc1/1920x1080/lpgwehfcHlqigBqk.mp4?tag=29)
+4. [山谷公路与巨树](https://video.twimg.com/amplify_video/2122030764632223744/vid/avc1/1920x1080/9dZvrVtEAdiutuNd.mp4?tag=29)
+5. [半木结构山村与渡槽](https://video.twimg.com/amplify_video/2121747379640786944/vid/avc1/1920x1080/1WE-Q0axNTXbWIZy.mp4?tag=29)
