@@ -88,6 +88,7 @@ function selectScene(updateURL = false) {
   camera.updateProjectionMatrix();
   if (!riders.has(vehicle)) riders.set(vehicle, createRider(vehicle));
   rider = riders.get(vehicle);
+  rider.setKit?.(dusk ? 'red' : route === 'coast' ? 'blue' : 'ivory');
   scene.add(rider.group);
   // The moving rider has its own ground projection, so a cached map only contains scenery.
   rider.group.traverse(object => {
@@ -95,7 +96,6 @@ function selectScene(updateURL = false) {
   });
   const sun = scene.getObjectByProperty('isDirectionalLight', true);
   rider.setLighting?.(sun?.position, course.road);
-  rider.setKit?.(dusk ? 'red' : 'ivory');
   for (const button of document.querySelectorAll('[data-vehicle]')) {
     button.setAttribute('aria-pressed', String(button.dataset.vehicle === vehicle));
   }

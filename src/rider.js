@@ -312,10 +312,15 @@ function loft(a, sections, base, angles, pigment, surface, sculpt) {
   a.add(geo,'#ffffff',matrix,surface)
 }
 
-function jacket(a, moto, red) {
-  const fabric=moto?'#242632':red?'#bb3728':'#e7e2d9'
-  const side=moto?'#171d25':red?'#7e2018':'#b0b5b0'
-  const seam=moto?'#484952':red?'#ce6950':'#ccd1cc'
+const kitColours = {
+  moto:  { fabric:'#242632', side:'#171d25', seam:'#484952' },
+  ivory: { fabric:'#e7e2d9', side:'#b0b5b0', seam:'#ccd1cc' },
+  red:   { fabric:'#bb3728', side:'#7e2018', seam:'#ce6950' },
+  blue:  { fabric:'#224ed4', side:'#162f82', seam:'#608beb', cuff:'#e8f4f7' },
+}
+
+function jacket(a, moto, colours) {
+  const {fabric,side,seam}=colours
   const tilt = moto ? -.52 : -.97
   const base = moto ? [0,.875,.196] : [0,.934,.18]
   const cross = [
@@ -354,7 +359,6 @@ function jacket(a, moto, red) {
     // Reinforced leather kidney band below the jacket hem.
     a.oval(at(0,.013,.006),[.15,.03,.105],'#191c22',[tilt,0,0],hide)
   }
-  return {fabric,side,seam}
 }
 
 function limb(a, start, end, profile, color, surface) {
@@ -366,9 +370,12 @@ function limb(a, start, end, profile, color, surface) {
   loft(a,rings,start,[angles.x,angles.y,angles.z],color,surface)
 }
 
-function buildUpper(moto,red=false) {
+function buildUpper(moto,name='ivory') {
   const a=assembly()
-  const {fabric,side,seam}=jacket(a,moto,red)
+  const colours=kitColours[moto?'moto':name]
+  const {fabric,side,seam,cuff}=colours
+  jacket(a,moto,colours)
+  const sleevePaint=(_angle,t)=>cuff && t>.61 ? cuff : fabric
   const shoulderY=moto?1.20:1.153, shoulderZ=moto?-.002:-.134
   const headY=moto?1.411:1.313, headZ=moto?-.135:-.277
   const handX=moto?.306:.207, handY=moto?.968:.92, handZ=moto?-.429:-.53
@@ -377,7 +384,7 @@ function buildUpper(moto,red=false) {
     const hand=[sign*handX,handY,handZ]
     const sleeve=v(shoulder).lerp(v(elbow),moto?.89:.61).toArray()
     const inner=[shoulder[0]-sign*.052,shoulder[1]+.006,shoulder[2]+.011]
-    limb(a,inner,sleeve,[[0,.048,.058],[.20,.073,.078],[.43,.073,.076],[.67,.066,.070],[1,.054,.058]],fabric,moto?hide:cloth)
+    limb(a,inner,sleeve,[[0,.048,.058],[.20,.073,.078],[.43,.073,.076],[.67,.066,.070],[1,.054,.058]],sleevePaint,moto?hide:cloth)
     limb(a,sleeve,elbow,[[0,.054,.058],[.44,.05,.055],[1,.051,.049]],moto?side:skin,moto?hide:cloth)
     a.oval(elbow,[.053,.05,.051],moto?side:skin)
     limb(a,elbow,hand,[[0,.05,.05],[.28,.052,.053],[.55,.043,.045],[.83,.033,.032],[1,.032,.028]],moto?fabric:skin,moto?hide:cloth)
@@ -633,8 +640,8 @@ export function createRider(type) {
     cast.update(dt,tilt,bob)
   }
   function setKit(name) {
-    if(moto || !['red','ivory'].includes(name)) return
-    if(!kits.has(name)) kits.set(name,buildUpper(false,name==='red'))
+    if(moto || !['ivory','red','blue'].includes(name)) return
+    if(!kits.has(name)) kits.set(name,buildUpper(false,name))
     if(upper!==kits.get(name)) {
       pivot.remove(upper)
       upper=kits.get(name)
