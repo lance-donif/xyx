@@ -222,3 +222,8 @@ noscript { position: fixed; inset: 0; display: grid; place-items: center; z-inde
   .course-meta { margin-bottom: 4px; }
 }
 .back-link { display: block; margin: 13px auto 0; padding: 4px 8px; background: transparent; color: var(--paper); border: 0; font-size: 12px; text-decoration: underline; text-underline-offset: 4px; }
+
+.chase-entry { display: none; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border: 1px solid var(--line); border-radius: 3px; background: #112728bf; color: var(--paper); font-size: 12px; font-weight: 700; text-decoration: none; }
+[data-state="menu"] .chase-entry { display: inline-flex; }
+.chase-entry span { color: var(--orange); font-size: 17px; }
+.chase-entry:is(:hover, :focus-visible) { border-color: var(--orange); background: var(--ink); }
